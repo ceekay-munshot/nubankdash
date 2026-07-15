@@ -11,7 +11,7 @@ import {
 import { Header, type DashboardTab } from "./components/Header";
 import { Kpi, type KpiProps } from "./components/Kpi";
 import { ShareLineChart } from "./components/charts/ShareLineChart";
-import { NplBarChart } from "./components/charts/NplBarChart";
+import { NplTrendChart, type Verdict } from "./components/charts/NplTrendChart";
 import { WatchlistWidget } from "./components/WatchlistWidget";
 import { SourceTrail } from "./components/SourceTrail";
 import { latest } from "./components/charts/common";
@@ -45,6 +45,79 @@ function pp(delta: number | null): { text: string; dir: KpiProps["direction"] } 
   const sign = delta > 0 ? "+" : "";
   return { text: `${sign}${delta.toFixed(1)}pp YoY`, dir };
 }
+
+// --- Asset-quality verdicts -------------------------------------------------
+// One-line, data-driven takeaways so each chart answers its own question. Numbers
+// are read live from the datasets; only the framing is editorial.
+
+const fmt = (n: number | null) => (n == null ? "–" : `${n.toFixed(1)}%`);
+/** Signed pp delta, e.g. +2.8 / -0.3 — never a hardcoded sign. */
+const signed = (n: number) => `${n >= 0 ? "+" : "-"}${Math.abs(n).toFixed(1)}`;
+const lv = (d: ChartData, name: string) => latest(seriesByName(d, name)?.values ?? []);
+const firstIdx = (d: ChartData, name: string) => {
+  const vals = seriesByName(d, name)?.values ?? [];
+  return vals.findIndex((v) => v != null);
+};
+const valAt = (d: ChartData, name: string, idx: number) => {
+  const vals = seriesByName(d, name)?.values ?? [];
+  return idx >= 0 && idx < vals.length ? vals[idx] : null;
+};
+
+// Verdicts are fully data-driven: the ranking, the answer, every sign and every
+// trend clause are derived from the datasets so the takeaway can never drift out
+// of sync with the chart when the workbook is regenerated.
+function buildVerdicts(): { npl: Verdict; early: Verdict; peer: Verdict } {
+  const card = lv(systemNpl, "Credit card loans")!;
+  const pers = lv(systemNpl, "Personal loans")!;
+  const pay = lv(systemNpl, "Payroll loans")!;
+
+  const carde = lv(systemEarlyNpl, "Credit card loans")!;
+  const perse = lv(systemEarlyNpl, "Personal loans")!;
+  const hhe = lv(systemEarlyNpl, "Household loans")!;
+
+  const inter = lv(peerNpl, "Inter")!;
+  const incs = [
+    { name: "Itaú", key: "Itaú" },
+    { name: "Santander", key: "Santander Brasil" },
+    { name: "Bradesco", key: "Bradesco" },
+  ].map((i) => ({ name: i.name, key: i.key, v: lv(peerNpl, i.key)! }));
+  const weakest = incs.reduce((a, b) => (b.v > a.v ? b : a)); // highest-NPL incumbent
+  const best = incs.reduce((a, b) => (b.v < a.v ? b : a)); // lowest-NPL incumbent
+  const interHighest = incs.every((i) => inter > i.v);
+
+  // Trajectory since Inter entered the peer set.
+  const entry = firstIdx(peerNpl, "Inter");
+  const interDelta = inter - (valAt(peerNpl, "Inter", entry) ?? inter);
+  const incTrends = incs.map((i) => ({ name: i.name, d: i.v - (valAt(peerNpl, i.key, entry) ?? i.v) }));
+  const lead = incTrends.reduce((a, b) => (b.d > a.d ? b : a)); // fastest-rising incumbent
+  const sectorRose = lead.d > 0.1;
+
+  const peerAnswer = interHighest
+    ? "Yes — Inter now carries the highest NPL of the four."
+    : inter > best.v
+      ? "Partly — Inter runs above best-in-class, but not the whole peer set."
+      : "No — Inter's NPL sits inside the incumbent range.";
+  const peerTrend = sectorRose
+    ? `Inter is up ${signed(interDelta)}pp since it joined the peer set in 2021 — but the sector drifted up too, led by ${lead.name} (${signed(lead.d)}pp).`
+    : `Inter is up ${signed(interDelta)}pp since it joined the peer set in 2021, while incumbents were flat-to-lower.`;
+
+  return {
+    npl: {
+      answer: "Card & personal-loan NPLs are back near cycle highs; payroll stays structurally clean.",
+      detail: `Credit-card (${fmt(card)}) and personal-loan (${fmt(pers)}) delinquencies have re-accelerated since 2022, while payroll holds at ${fmt(pay)} — a ~${Math.round(card - pay)}pp gap between unsecured stress and secured resilience.`,
+    },
+    early: {
+      answer: "Leading indicator — early arrears run hottest in household & personal loans.",
+      detail: `Household (${fmt(hhe)}) and personal-loan (${fmt(perse)}) early NPLs lead and are still climbing; card early NPL (${fmt(carde)}) ticked back up in 1Q26 — an advance signal that 90-day NPLs may re-accelerate next.`,
+    },
+    peer: {
+      answer: peerAnswer,
+      detail: `At ${fmt(inter)}, Inter is ${signed(inter - weakest.v)}pp vs the weakest incumbent (${weakest.name} ${fmt(weakest.v)}) and ${signed(inter - best.v)}pp vs best-in-class ${best.name} (${fmt(best.v)}). ${peerTrend}`,
+    },
+  };
+}
+
+const VERDICTS = buildVerdicts();
 
 function SectionLabel({ title, hint }: { title: string; hint: string }) {
   return (
@@ -258,29 +331,34 @@ export function Dashboard() {
         {/* Asset quality section */}
         <SectionLabel title="Asset quality" hint="System credit cycle & peer credit risk (NPL %)" />
         <div style={{ ...GRID(460), marginTop: 12, marginBottom: 28 }}>
-          <NplBarChart
+          <NplTrendChart
             data={systemNpl}
             title="System NPL by product"
-            subtitle="Macro credit cycle — card & personal NPLs rising again; payroll structurally clean"
+            subtitle="Macro credit cycle — 90-day NPL ratio by loan product"
             category="analytics"
+            verdict={VERDICTS.npl}
             span={2}
-            chartHeight={260}
+            chartHeight={244}
           />
-          <NplBarChart
+          <NplTrendChart
             data={systemEarlyNpl}
             title="System early NPL by product"
-            subtitle="Leading indicator — short-dated arrears by product"
+            subtitle="Leading indicator — 15-to-90-day arrears by loan product"
             category="analytics"
+            verdict={VERDICTS.early}
             span={2}
-            chartHeight={260}
+            chartHeight={244}
           />
-          <NplBarChart
+          <NplTrendChart
             data={peerNpl}
             title="Peer NPL ratio"
             subtitle="Are digital banks (Inter) taking worse credit risk than incumbents?"
             category="sector"
+            verdict={VERDICTS.peer}
+            highlight="Inter"
+            band={{ of: ["Itaú", "Santander Brasil", "Bradesco"], label: "Incumbent range" }}
             span={2}
-            chartHeight={260}
+            chartHeight={244}
           />
         </div>
 

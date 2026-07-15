@@ -48,8 +48,18 @@
 }
 #dashboard-main::-webkit-scrollbar-thumb:hover { background: rgba(17, 24, 39, 0.24); background-clip: content-box; }
 
-.seg-btn { transition: all 0.2s ease; }
-.link-btn { transition: all 0.2s ease; }
+.seg-btn { transition: background-color 160ms ease, color 160ms ease, box-shadow 160ms ease; }
+.seg-btn:active { transform: scale(0.97); }
+@media (hover: hover) and (pointer: fine) {
+  .seg-btn:not([aria-pressed="true"]):hover { background: rgba(17, 24, 39, 0.04); color: #374151; }
+}
+.link-btn { transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease; }
+
+@media (prefers-reduced-motion: reduce) {
+  .seg-btn:active { transform: none; }
+  .widget-card { transition: box-shadow 0.35s ease, border-color 0.35s ease; }
+  .widget-card:hover { transform: none; }
+}
 .link-btn:hover { background: #eef2ff !important; color: #4338ca !important; border-color: #e0e7ff !important; }
 
 /* Recharts focus outlines off (we provide our own hover layer). */

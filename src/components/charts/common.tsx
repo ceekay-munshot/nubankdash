@@ -46,7 +46,7 @@ export function CategoryTick(props: any) {
 export function ChartTooltip({ active, payload, label, decimals = 1, unit = "%" }: any) {
   if (!active || !payload || payload.length === 0) return null;
   const rows = payload
-    .filter((p: any) => p.value !== null && p.value !== undefined)
+    .filter((p: any) => p.value !== null && p.value !== undefined && !Array.isArray(p.value) && p.dataKey !== "__band")
     .sort((a: any, b: any) => (b.value as number) - (a.value as number));
   if (rows.length === 0) return null;
   return (
@@ -80,10 +80,13 @@ export function ChartLegend({
   data,
   highlight,
   decimals = 1,
+  bandLabel,
 }: {
   data: ChartData;
   highlight?: string;
   decimals?: number;
+  /** When set, prepends a shaded swatch explaining the chart's range band. */
+  bandLabel?: string;
 }) {
   return (
     <div
@@ -92,6 +95,17 @@ export function ChartLegend({
         borderTop: `1px solid ${t.border}`,
       }}
     >
+      {bandLabel && (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+          <span
+            style={{
+              width: 14, height: 10, borderRadius: 3,
+              background: "rgba(79,70,229,0.14)", border: "1px solid rgba(79,70,229,0.28)", flexShrink: 0,
+            }}
+          />
+          <span style={{ color: t.textMuted }}>{bandLabel}</span>
+        </span>
+      )}
       {data.series.map((s) => {
         const isHi = s.name === highlight;
         const lv = latest(s.values);
@@ -116,15 +130,25 @@ export function ChartLegend({
   );
 }
 
-/** Chart / Table segmented toggle for a widget header. */
-export function ViewToggle({ view, onChange }: { view: "chart" | "table"; onChange: (v: "chart" | "table") => void }) {
+/** Segmented view toggle for a widget header. Defaults to Chart / Table; pass
+ *  `options` for a custom set (e.g. Trend / Bars / Table). */
+export function ViewToggle<T extends string>({
+  view,
+  onChange,
+  options = ["chart", "table"] as unknown as readonly T[],
+}: {
+  view: T;
+  onChange: (v: T) => void;
+  options?: readonly T[];
+}) {
   return (
     <div style={{ display: "inline-flex", background: "#f3f4f6", borderRadius: 8, padding: 2 }}>
-      {(["chart", "table"] as const).map((v) => (
+      {options.map((v) => (
         <button
           key={v}
           className="seg-btn"
           onClick={() => onChange(v)}
+          aria-pressed={view === v}
           style={{
             border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "3px 10px",
             borderRadius: 6, textTransform: "capitalize",
