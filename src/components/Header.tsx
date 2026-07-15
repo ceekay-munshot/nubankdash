@@ -53,16 +53,49 @@ function IconButton({ label, onClick, title }: { label: string; onClick?: () => 
   );
 }
 
+export type DashboardTab = "overview" | "insights";
+
+function TabSwitch({ tab, onTab, insightCount }: { tab: DashboardTab; onTab: (t: DashboardTab) => void; insightCount: number }) {
+  return (
+    <div role="tablist" style={{ display: "inline-flex", background: "#f3f4f6", borderRadius: 9, padding: 2 }}>
+      {(["overview", "insights"] as const).map((v) => (
+        <button
+          key={v}
+          role="tab"
+          aria-selected={tab === v}
+          className="seg-btn"
+          onClick={() => onTab(v)}
+          style={{
+            border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, padding: "4px 12px",
+            borderRadius: 7, whiteSpace: "nowrap",
+            background: tab === v ? "#fff" : "transparent",
+            color: tab === v ? t.primaryText : t.textMuted,
+            boxShadow: tab === v ? "0 1px 2px rgba(0,0,0,0.08)" : "none",
+          }}
+        >
+          {v === "overview" ? "Overview" : `Insights · ${insightCount}`}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function Header({
   ticker,
   tickerCompany,
   connected,
   onExport,
+  tab,
+  onTab,
+  insightCount,
 }: {
   ticker: string | null;
   tickerCompany: string | null;
   connected: boolean;
   onExport: () => void;
+  tab: DashboardTab;
+  onTab: (t: DashboardTab) => void;
+  insightCount: number;
 }) {
   return (
     <header
@@ -92,6 +125,7 @@ export function Header({
         {ticker && <TickerPill ticker={ticker} company={tickerCompany} />}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <TabSwitch tab={tab} onTab={onTab} insightCount={insightCount} />
         <SessionDot connected={connected} />
         <IconButton label="Export PNG" onClick={onExport} title="Download a snapshot of the dashboard" />
       </div>

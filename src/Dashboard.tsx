@@ -8,13 +8,17 @@ import {
   creditCardShare, tpvShare, unsecuredShare, payrollShare,
   systemNpl, systemEarlyNpl, peerNpl, type ChartData,
 } from "./data/datasets";
-import { Header } from "./components/Header";
+import { Header, type DashboardTab } from "./components/Header";
 import { Kpi, type KpiProps } from "./components/Kpi";
 import { ShareLineChart } from "./components/charts/ShareLineChart";
 import { NplBarChart } from "./components/charts/NplBarChart";
 import { WatchlistWidget } from "./components/WatchlistWidget";
 import { SourceTrail } from "./components/SourceTrail";
 import { latest } from "./components/charts/common";
+import { InsightsView } from "./views/InsightsView";
+import { InsightModal } from "./components/insights/InsightModal";
+import { INSIGHTS } from "./insights/engine";
+import type { Insight } from "./insights/types";
 
 // --- KPI helpers ------------------------------------------------------------
 
@@ -75,6 +79,18 @@ export function Dashboard() {
   const connected = !!session.token;
   const generatedAt = useMemo(() => new Date().toISOString().slice(0, 16).replace("T", " ") + " UTC", []);
 
+  const [tab, setTab] = useState<DashboardTab>("overview");
+  const [openInsight, setOpenInsight] = useState<Insight | null>(null);
+
+  const switchTab = (v: DashboardTab) => {
+    setTab(v);
+    sdk.publish("dashboard.tab.change", { tab: v });
+  };
+  const openInsightModal = (i: Insight) => {
+    setOpenInsight(i);
+    sdk.publish("dashboard.insight.open", { id: i.id });
+  };
+
   // Snapshot getter, reassigned each render so the host always reads live state.
   const snapshotRef = useRef<() => unknown>(() => ({}));
 
@@ -101,7 +117,7 @@ export function Dashboard() {
       sessionUser: session.userName ?? null,
       generatedAt,
     },
-    selection: { view: "overview" },
+    selection: { view: tab, openInsight: openInsight?.id ?? null },
     data: {
       kpis: kpis.map((k) => ({ label: k.label, value: k.value, delta: k.delta ?? null })),
       latest: {
@@ -111,6 +127,9 @@ export function Dashboard() {
         nuPayrollShare: latest(seriesByName(payrollShare, "Nu")!.values),
         systemCardNpl: latest(seriesByName(systemNpl, "Credit card loans")!.values),
       },
+      insights: INSIGHTS.map((i) => ({
+        id: i.id, kind: i.kind, title: i.title, stat: i.stat.value, takeaway: i.takeaway,
+      })),
     },
   });
 
@@ -182,9 +201,21 @@ export function Dashboard() {
         background: t.pageBg, fontFamily: font, color: t.textPrimary,
       }}
     >
-      <Header ticker={ticker} tickerCompany={tickerCompany} connected={connected} onExport={onExport} />
+      <Header
+        ticker={ticker}
+        tickerCompany={tickerCompany}
+        connected={connected}
+        onExport={onExport}
+        tab={tab}
+        onTab={switchTab}
+        insightCount={INSIGHTS.length}
+      />
 
       <main id="dashboard-main" data-dashboard-capture-root="true" style={{ flex: 1, overflow: "auto", padding: "24px 32px" }}>
+        {tab === "insights" ? (
+          <InsightsView onOpen={openInsightModal} />
+        ) : (
+          <>
         {/* KPI strip */}
         <div style={{ ...GRID(200), marginBottom: 24 }}>
           {kpis.map((k) => (
@@ -261,7 +292,13 @@ export function Dashboard() {
             <SourceTrail generatedAt={generatedAt} />
           </div>
         </div>
+          </>
+        )}
       </main>
+
+      {/* Transparency modal — outside #dashboard-main so host visual snapshots
+          capture the dashboard, never the overlay. */}
+      {openInsight && <InsightModal insight={openInsight} onClose={() => setOpenInsight(null)} />}
     </div>
   );
 }

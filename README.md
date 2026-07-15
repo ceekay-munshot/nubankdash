@@ -24,6 +24,19 @@ Every chart has a **Chart / Table** toggle (the accessible table view is also th
 relief channel for low-contrast series), a crosshair tooltip, and a legend that
 shows each entity's latest value.
 
+## Insights tab
+
+The header's **Overview | Insights** switch opens a second view: nuanced,
+buy-side-oriented findings computed at load time by the insight engine
+([`src/insights/engine.ts`](src/insights/engine.ts)) from the same bundled
+series — e.g. the TPV-vs-credit monetization gap, the 2Q25 record share grab in
+a shrinking market, mix-weighted NPL exposure vs incumbents, and the measured
+(not assumed) early-NPL lead-lag. Clicking any card opens a transparency modal
+with the source sheets, every arithmetic step shown with the real values, the
+one-line formula, an evidence chart, and the caveats. No insight number is
+hardcoded; if the data changes, the insights recompute (and an insight whose
+inputs disappear is skipped rather than crashing).
+
 ## Data
 
 All series are bundled in [`src/data/datasets.ts`](src/data/datasets.ts),
