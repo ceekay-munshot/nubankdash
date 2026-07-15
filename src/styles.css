@@ -1,0 +1,54 @@
+/* Global chrome for the Munshot dashboard shell. Only Zone 2 scrolls. */
+* { box-sizing: border-box; }
+
+:root {
+  --shimmer-a: #e5e7eb;
+  --shimmer-b: #f3f4f6;
+}
+
+.widget-card {
+  transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.widget-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(79, 70, 229, 0.2);
+  box-shadow:
+    0 20px 40px rgba(0, 0, 0, 0.08),
+    0 8px 16px rgba(79, 70, 229, 0.06);
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.shimmer {
+  background-image: linear-gradient(90deg, var(--shimmer-a) 0%, var(--shimmer-b) 50%, var(--shimmer-a) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 6px;
+}
+
+/* Zone 2 scrollbar — subtle, so the content stays the focus. */
+#dashboard-main::-webkit-scrollbar { width: 10px; height: 10px; }
+#dashboard-main::-webkit-scrollbar-thumb {
+  background: rgba(17, 24, 39, 0.14);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+#dashboard-main::-webkit-scrollbar-thumb:hover { background: rgba(17, 24, 39, 0.24); background-clip: content-box; }
+
+.seg-btn { transition: all 0.2s ease; }
+.link-btn { transition: all 0.2s ease; }
+.link-btn:hover { background: #eef2ff !important; color: #4338ca !important; border-color: #e0e7ff !important; }
+
+/* Recharts focus outlines off (we provide our own hover layer). */
+.recharts-wrapper:focus, .recharts-surface:focus { outline: none; }
+
+/* Data-table view inside a widget. */
+.data-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.data-table th, .data-table td { padding: 5px 8px; text-align: right; white-space: nowrap; }
+.data-table th:first-child, .data-table td:first-child { text-align: left; position: sticky; left: 0; }
+.data-table thead th { position: sticky; top: 0; background: #ffffff; z-index: 1; border-bottom: 1px solid #e5e7eb; color: #6b7280; font-weight: 600; }
+.data-table tbody tr:nth-child(even) { background: rgba(249, 250, 251, 0.7); }
+.data-table td:first-child, .data-table th:first-child { background: inherit; }
