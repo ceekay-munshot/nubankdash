@@ -58,6 +58,23 @@ export function InsightsView({ onOpen }: { onOpen: (i: Insight) => void }) {
             {INSIGHTS.length} nuanced findings computed from the workbook — click any card for the sources and step-by-step math
           </span>
         </div>
+        {/* plain-English glossary for the few finance terms the data uses */}
+        <div
+          style={{
+            fontSize: 11.5, color: t.textMuted, lineHeight: 1.7,
+            background: "rgba(255,255,255,0.7)", border: `1px solid ${t.border}`,
+            borderRadius: 10, padding: "8px 12px",
+          }}
+        >
+          <strong style={{ color: t.textSecondary }}>Plain-English glossary:</strong>{" "}
+          <strong>NPL / defaults</strong> = share of loans overdue and not being repaid ·{" "}
+          <strong>Early NPL</strong> = loans just starting to miss payments ·{" "}
+          <strong>TPV</strong> = total card spending a bank processes ·{" "}
+          <strong>Unsecured</strong> = loans with no collateral behind them ·{" "}
+          <strong>pp</strong> = percentage points ·{" "}
+          <strong>bp</strong> = hundredths of a percentage point ·{" "}
+          <strong>QoQ</strong> = vs the previous quarter
+        </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
           <FilterChip active={filter === "all"} label="All" count={INSIGHTS.length} onClick={() => setFilter("all")} />
           {KIND_ORDER.filter((k) => (counts.get(k) ?? 0) > 0).map((k) => (
