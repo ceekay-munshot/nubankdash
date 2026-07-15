@@ -130,6 +130,43 @@ function SectionLabel({ title, hint }: { title: string; hint: string }) {
   );
 }
 
+/** Section that starts collapsed; children mount only when expanded (lazy). */
+function CollapsibleSection({ title, hint, children }: { title: string; hint: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="seg-btn"
+        style={{
+          display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", width: "100%",
+          margin: "8px 0 2px", padding: "6px 2px", background: "transparent", border: "none",
+          cursor: "pointer", textAlign: "left",
+        }}
+      >
+        <span
+          aria-hidden
+          style={{
+            fontSize: 10, color: t.textMuted, display: "inline-block", alignSelf: "center",
+            transform: open ? "rotate(90deg)" : "none", transition: "transform 0.2s ease",
+          }}
+        >
+          ▶
+        </span>
+        <h2 style={{ fontSize: 13, fontWeight: 700, color: t.textPrimary, margin: 0, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+          {title}
+        </h2>
+        <span style={{ fontSize: 12, color: t.textHint }}>{hint}</span>
+        <span style={{ marginLeft: "auto", fontSize: 12, fontWeight: 600, color: t.primaryText }}>
+          {open ? "Hide" : "Show"}
+        </span>
+      </button>
+      {open && children}
+    </section>
+  );
+}
+
 function KpiTile({ children }: { children: React.ReactNode }) {
   return (
     <div
@@ -362,14 +399,15 @@ export function Dashboard() {
           />
         </div>
 
-        {/* Context + provenance */}
-        <SectionLabel title="Session & sources" hint="Host watchlist and data provenance" />
-        <div style={{ ...GRID(360), marginTop: 12 }}>
-          <WatchlistWidget token={session.token} />
-          <div style={{ gridColumn: "span 2" }}>
-            <SourceTrail generatedAt={generatedAt} />
+        {/* Context + provenance — collapsed by default; widgets mount on expand */}
+        <CollapsibleSection title="Session & sources" hint="Host watchlist and data provenance">
+          <div style={{ ...GRID(360), marginTop: 12 }}>
+            <WatchlistWidget token={session.token} />
+            <div style={{ gridColumn: "span 2" }}>
+              <SourceTrail generatedAt={generatedAt} />
+            </div>
           </div>
-        </div>
+        </CollapsibleSection>
           </>
         )}
       </main>
