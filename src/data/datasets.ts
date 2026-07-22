@@ -7,6 +7,10 @@
 //  - TPV share    = bank card TPV (R$ bn) / sum of the 8 tracked issuers.
 //  - Asset-quality series are the published system / peer NPL ratios (%).
 // Nu is the sum of its two Brazilian legal entities across every loan section.
+//
+// De-spiked share cells (mirror the nulled balances in absolutes.ts, since
+// share = balance / system total): unsecuredShare · Itaú · 3Q23, and
+// creditCardShare · Caixa · 2Q25 & 3Q25. See absolutes.ts for why.
 
 export interface Series {
   /** Legend + entity name; drives the fixed entity->color map. */
@@ -28,7 +32,7 @@ export const creditCardShare: ChartData = {
     { name: "Ita\u00fa", values: [33.86, 31.97, 33.39, 32.8, 32.66, 30.14, 28.55, 27.48, 26.33, 25.54, 25.1, 24.91, 24.31, 23.68, 23.45, 23.13, 23.14, 22.28, 21.45, 21] },
     { name: "Bradesco", values: [16.11, 18.64, 16.86, 15, 14.44, 14.1, 13.37, 13.88, 14.25, 14.01, 13.48, 12.85, 12.46, 12.17, 12.14, 11.88, 11.48, 11.5, 11.12, 10.78] },
     { name: "Santander", values: [11.43, 11.72, 12.68, 13.51, 12.92, 13.08, 11.67, 9.75, 9.46, 9.35, 9.31, 9.35, 9.38, 9.46, 9.44, 9.59, 9.1, 9.25, 9.15, 9.04] },
-    { name: "Caixa", values: [6.01, 5.28, 4.8, 4.21, 3.95, 3.46, 2.72, 2.66, 2.68, 2.72, 2.75, 2.73, 2.76, 2.77, 2.83, 2.67, 2.73, 0.89, 0.93, 3.01] },
+    { name: "Caixa", values: [6.01, 5.28, 4.8, 4.21, 3.95, 3.46, 2.72, 2.66, 2.68, 2.72, 2.75, 2.73, 2.76, 2.77, 2.83, 2.67, 2.73, null, null, 3.01] }, // 2Q25/3Q25 de-spiked — see absolutes.ts
     { name: "BB", values: [13.68, 13.37, 12.81, 12.33, 11.59, 11.71, 12.55, 11.48, 11.33, 11.01, 10.67, 10.45, 10.08, 9.71, 9.64, 9.68, 9.47, 9.63, 9.67, 9.76] },
     { name: "Inter", values: [null, null, 0.09, null, null, 0.68, 1.19, 1.32, 1.38, 1.44, 1.6, 1.63, 1.76, 1.78, 1.77, 1.8, 1.76, 1.92, 1.97, 1.96] },
   ],
@@ -52,7 +56,7 @@ export const unsecuredShare: ChartData = {
   periods: ["2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022", "1Q23", "2Q23", "3Q23", "4Q23", "1Q24", "2Q24", "3Q24", "4Q24", "1Q25", "2Q25", "3Q25", "4Q25"],
   series: [
     { name: "Nu", values: [0, 0, 0, 0, 0, 0.68, 3.49, 4.48, 4.89, 5.36, 5.96, 6.59, 7.39, 8.29, 9.36, 10.62, 11.12, 12.62, 13.38, 14.2] },
-    { name: "Ita\u00fa", values: [11.46, 9.71, 11.2, 11.57, 10.97, 7.22, 8.26, 7.94, 7.81, 8.22, 17.03, 8.67, 8.31, 8.34, 8.32, 8.26, 7.84, 8.14, 8.1, 7.94] },
+    { name: "Ita\u00fa", values: [11.46, 9.71, 11.2, 11.57, 10.97, 7.22, 8.26, 7.94, 7.81, 8.22, null, 8.67, 8.31, 8.34, 8.32, 8.26, 7.84, 8.14, 8.1, 7.94] }, // 3Q23 de-spiked — see absolutes.ts
     { name: "Bradesco", values: [11.69, 16.45, 14.25, 15.45, 18.53, 16.25, 14.34, 13.82, 13.12, 12.44, 11.74, 11.06, 11.78, 12.42, 12.87, 13.33, 12.28, 13.58, 12.59, 12.6] },
     { name: "Santander", values: [6.27, 7.23, 9.17, 9.76, 8.19, 7.25, 7.52, 6.05, 5.97, 5.81, 5.59, 5.41, 5.06, 4.8, 4.58, 4.39, 3.86, 3.84, 3.75, 3.76] },
     { name: "Caixa", values: [8.1, 6.28, 4.85, 3.87, 3.28, 5.64, 5.38, 5.1, 4.75, 4.46, 4.19, 3.75, 3.41, 3.23, 3.13, 3.09, 2.89, 3.05, 3.01, 2.91] },

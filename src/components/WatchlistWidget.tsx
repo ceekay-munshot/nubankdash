@@ -20,6 +20,9 @@ export function WatchlistWidget({ token }: { token: string | null }) {
   useEffect(() => {
     if (!token) return;
     const ctrl = new AbortController();
+    // Drop the prior token's rows so a session/user switch shows the loading
+    // shimmer, never the previous session's watchlist while the new fetch runs.
+    setItems(null);
     setLoading(true);
     setError(null);
     fetchPortfolio(token, ctrl.signal)

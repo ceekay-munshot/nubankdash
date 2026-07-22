@@ -19,7 +19,7 @@ import type { ChartData } from "../../data/datasets";
 import { colorFor, t } from "../../theme";
 import { WidgetCard, type Category } from "../WidgetCard";
 import {
-  CategoryTick, ChartLegend, ChartTooltip, DataTable, fmtPct, latest, toRows, ViewToggle,
+  CategoryTick, ChartLegend, ChartTooltip, DataTable, fmtPct, isolatedDot, latest, toRows, ViewToggle,
 } from "./common";
 
 export type Verdict = { answer: string; detail: string; accent?: string };
@@ -135,7 +135,7 @@ export function NplTrendChart({
                         dataKey={s.name}
                         stroke={colorFor(s.name)}
                         strokeWidth={isHi ? 3 : 1.75}
-                        dot={false}
+                        dot={isolatedDot(s.values, colorFor(s.name))}
                         activeDot={{ r: isHi ? 5 : 4, strokeWidth: 0 }}
                         connectNulls={false}
                         isAnimationActive={false}

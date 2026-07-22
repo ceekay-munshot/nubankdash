@@ -1,8 +1,18 @@
 // AUTO-GENERATED from the Nu Brazil workbook (05.20.2026) — Loans sheet.
 // Absolute loan balances in R$ mn (despiked like the share series). "Nu" is the
-// sum of Nu's two Brazilian legal entities; "System" is the sheet's Total row.
+// sum of Nu's two Brazilian legal entities; "System" is the sheet's Total row
+// (IF.data's independent system total, NOT a sum of the listed banks — so a
+// single bank's cell error cannot distort System, Nu's share, or any insight).
 // Used by the insight engine so every calculation is reproducible in-app.
 // Regenerate with scratchpad/parse.py if the source workbook changes.
+//
+// De-spike corrections (source cells that survived the original de-spike pass but
+// are physically impossible for a loan STOCK, so nulled per the README method):
+//   · Unsecured · Itaú · 3Q23  — source keyed 47,307, an exact duplicate of BB's
+//     3Q23 cell and a lone 2Q23→3Q23→4Q23 spike (22,399 → 47,307 → 24,465).
+//   · Credit card · Caixa · 2Q25 & 3Q25 — source keyed 5,692 / 6,194, a −68% drop
+//     that rebounds to 22,149 (a stock cannot round-trip like that).
+// None of these cells feed an insight; the fix only removes the visible chart spike.
 import type { ChartData } from "./datasets";
 
 export const loanAbsCreditCard: ChartData = {
@@ -12,7 +22,7 @@ export const loanAbsCreditCard: ChartData = {
     { name: "Ita\u00fa", values: [58544, 59025, 66944, 77471, 90931, 86268, 112096, 135078, 130356, 128353, 127742, 135489, 130933, 130938, 133211, 142207, 150938, 141997, 143077, 154450] },
     { name: "Bradesco", values: [27862, 34410, 33803, 35441, 40213, 40350, 52513, 68243, 70563, 70387, 68605, 69885, 67128, 67306, 68969, 73074, 74860, 73252, 74171, 79254] },
     { name: "Santander", values: [19768, 21635, 25425, 31905, 35958, 37431, 45810, 47908, 46828, 46965, 47361, 50866, 50517, 52294, 53638, 58974, 59347, 58934, 61010, 66479] },
-    { name: "Caixa", values: [10386, 9749, 9622, 9947, 11007, 9911, 10674, 13057, 13293, 13645, 13997, 14835, 14870, 15307, 16074, 16425, 17838, 5692, 6194, 22149] },
+    { name: "Caixa", values: [10386, 9749, 9622, 9947, 11007, 9911, 10674, 13057, 13293, 13645, 13997, 14835, 14870, 15307, 16074, 16425, 17838, null, null, 22149] }, // 2Q25/3Q25 de-spiked (impossible −68% round-trip)
     { name: "BB", values: [23656, 24681, 25696, 29136, 32278, 33504, 49271, 56450, 56110, 55320, 54274, 56871, 54267, 53705, 54742, 59518, 61768, 61349, 64486, 71772] },
     { name: "Inter", values: [null, null, 172, null, null, 1953, 4666, 6495, 6828, 7215, 8130, 8889, 9478, 9831, 10073, 11088, 11490, 12232, 13170, 14445] },
     { name: "XP", values: [null, null, 0, 0, 0, 51, null, 5161, 5668, 6313, 6838, 7877, 7407, 7425, 7798, 8405, 8196, 8207, 8532, 9397] },
@@ -24,7 +34,7 @@ export const loanAbsUnsecured: ChartData = {
   periods: ["2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022", "1Q23", "2Q23", "3Q23", "4Q23", "1Q24", "2Q24", "3Q24", "4Q24", "1Q25", "2Q25", "3Q25", "4Q25"],
   series: [
     { name: "Nu", values: [null, null, null, null, 0, 1048, 7763, 11870, 13273, 14608, 16543, 18590, 22447, 25727, 30076, 35382, 42102, 46662, 51463, 55766] },
-    { name: "Ita\u00fa", values: [12040, 9473, 10895, 12969, 14788, 11181, 18381, 21040, 21209, 22399, 47307, 24465, 25252, 25861, 26731, 27522, 29679, 30119, 31132, 31182] },
+    { name: "Ita\u00fa", values: [12040, 9473, 10895, 12969, 14788, 11181, 18381, 21040, 21209, 22399, null, 24465, 25252, 25861, 26731, 27522, 29679, 30119, 31132, 31182] }, // 3Q23 de-spiked (source dup of BB's 47307)
     { name: "Bradesco", values: [12284, 16045, 13854, 17311, 24981, 25162, 31919, 36607, 35621, 33896, 32613, 31194, 35784, 38537, 41367, 44418, 46474, 50246, 48412, 49482] },
     { name: "Santander", values: [6591, 7052, 8919, 10940, 11045, 11222, 16740, 16041, 16216, 15841, 15536, 15264, 15370, 14896, 14724, 14643, 14599, 14212, 14431, 14774] },
     { name: "Caixa", values: [8515, 6124, 4713, 4333, 4427, 8739, 11989, 13504, 12894, 12160, 11626, 10574, 10351, 10020, 10061, 10300, 10936, 11263, 11588, 11435] },

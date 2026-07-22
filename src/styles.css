@@ -7,7 +7,12 @@
 }
 
 .widget-card {
-  transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  /* Only the properties the hover actually changes — never `all` (which would
+     also transition layout props). transform stays GPU-friendly. */
+  transition:
+    transform 0.35s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.35s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.35s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .widget-card:hover {
   transform: translateY(-4px);

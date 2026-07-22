@@ -5,7 +5,7 @@ import {
 } from "recharts";
 import type { Evidence } from "../../insights/types";
 import { colorFor, t } from "../../theme";
-import { CategoryTick, ChartTooltip, toRows } from "../charts/common";
+import { CategoryTick, ChartTooltip, isolatedDot, toRows } from "../charts/common";
 
 // Derived series (e.g. "Headline NPL") aren't entities; give them a fixed,
 // CVD-safe order (blue/yellow is the most robust pair) instead of muted gray.
@@ -32,14 +32,17 @@ export function EvidenceChart({ ev, compact = false }: { ev: Evidence; compact?:
         <YAxis width={compact ? 2 : 46} tick={compact ? false : { fontSize: 10, fill: t.textMuted }} tickLine={false} axisLine={false} domain={["auto", "auto"]} tickFormatter={(v: number) => `${v}${unit === "%" ? "%" : ""}`} />
         {!compact && <Tooltip content={<ChartTooltip decimals={decimals} unit={unit} />} cursor={{ stroke: t.textHint, strokeDasharray: "3 3" }} />}
         {ev.data.series.map((s, i) => (
-          <Line key={s.name} type="monotone" dataKey={s.name} stroke={seriesColor(s.name, i)} strokeWidth={s.name === "Nu" ? 2.6 : 2} dot={false} activeDot={compact ? false : { r: 4, strokeWidth: 0 }} connectNulls={false} isAnimationActive={false} />
+          <Line key={s.name} type="monotone" dataKey={s.name} stroke={seriesColor(s.name, i)} strokeWidth={s.name === "Nu" ? 2.6 : 2} dot={isolatedDot(s.values, seriesColor(s.name, i), compact ? 1.8 : 2.5)} activeDot={compact ? false : { r: 4, strokeWidth: 0 }} connectNulls={false} isAnimationActive={false} />
         ))}
       </LineChart>
     ) : (
       <BarChart data={rows} margin={compact ? { top: 4, right: 4, bottom: 0, left: 4 } : { top: 6, right: 14, bottom: 2, left: -8 }} barCategoryGap="24%" barGap={2}>
         {!compact && <CartesianGrid stroke={t.gridline} vertical={false} />}
         <XAxis dataKey="period" interval={0} tick={false} tickLine={false} axisLine={compact ? false : { stroke: t.borderSolid }} height={2} />
-        <YAxis width={compact ? 2 : 52} tick={compact ? false : { fontSize: 10, fill: t.textMuted }} tickLine={false} axisLine={false} domain={["auto", "auto"]} tickFormatter={(v: number) => `${v}${unit === "%" ? "%" : ""}`} />
+        {/* Bars encode magnitude by length, so the axis MUST start at 0 when all
+            values are positive (a non-zero baseline exaggerates differences). With
+            negatives present, span auto→auto so both directions from the 0 line show. */}
+        <YAxis width={compact ? 2 : 52} tick={compact ? false : { fontSize: 10, fill: t.textMuted }} tickLine={false} axisLine={false} domain={hasNegative ? ["auto", "auto"] : [0, "auto"]} tickFormatter={(v: number) => `${v}${unit === "%" ? "%" : ""}`} />
         {!compact && <Tooltip content={<ChartTooltip decimals={decimals} unit={unit} />} cursor={{ fill: "rgba(17,24,39,0.05)" }} />}
         {hasNegative && <ReferenceLine y={0} stroke={t.borderSolid} />}
         {ev.data.series.map((s, i) => (

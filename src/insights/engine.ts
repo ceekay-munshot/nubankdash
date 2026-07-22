@@ -287,7 +287,7 @@ function insightPersonalCycle(): Insight {
     kind: "risk",
     confidence: "Medium",
     title: "Personal-loan defaults are still climbing — no peak in sight",
-    takeaway: `Defaults on personal loans are up ${signed(curH.value - trough)}pp since 3Q24, to ${f(curH.value)}% — and the live gauge (loans just starting to miss payments) is itself still making new highs. The data gives no reason to call the top yet.`,
+    takeaway: `Defaults on personal loans are up ${signed(curH.value - trough)}pp since 3Q24, to ${f(curH.value)}% — and the live gauge (loans just starting to miss payments) has risen ${rises} quarters running. The data gives no reason to call the top yet.`,
     stat: { value: `${f(curH.value)}%`, label: `of personal loans gone bad — and the early-warning gauge is still rising` },
     detail: `This matters because personal loans are where Nu is growing fastest (see the '34% of all growth' insight). We also tested the common belief that early defaults predict headline defaults 2–3 quarters in advance: in this data they don't — the two move together in the same quarter (correlation ${f(r0.r, 2)}). So the message is simple: the live gauge hasn't turned down, which means the default cycle most likely hasn't peaked.`,
     sources: [SHEETS.aq],

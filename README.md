@@ -14,15 +14,16 @@ SDK** (session token + selected ticker are supplied by the host).
 - **Unsecured loans** — Nu's fastest-growing book (~14%)
 - **Payroll loans** — Nu's newest entry, still <1% of a bank-dominated market
 
-**Asset quality** (system credit cycle & peer risk, NPL %, bar charts)
+**Asset quality** (system credit cycle & peer risk, NPL %, trend charts)
 
 - **System NPL by product** — card & personal NPLs rising again; payroll structurally clean
 - **System early NPL by product** — the leading indicator (short-dated arrears)
 - **Peer NPL ratio** — Itaú / Santander / Bradesco / Inter, i.e. are digital banks taking worse risk?
 
-Every chart has a **Chart / Table** toggle (the accessible table view is also the
-relief channel for low-contrast series), a crosshair tooltip, and a legend that
-shows each entity's latest value.
+Every chart has a view toggle (**Chart / Table**, or **Trend / Bars / Table** on
+the asset-quality charts — the accessible table view is also the relief channel
+for low-contrast series), a crosshair tooltip, and a legend that shows each
+entity's latest value.
 
 ## Insights tab
 

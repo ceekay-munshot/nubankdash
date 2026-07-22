@@ -25,6 +25,29 @@ export function latest(values: (number | null)[]): number | null {
   return null;
 }
 
+/**
+ * Recharts `dot` renderer that draws a marker ONLY for an isolated non-null point
+ * — a value whose neighbors (or the series edge) are both null. With
+ * `connectNulls={false}` such a point gets no line segment, and with `dot={false}`
+ * no marker either, so it would silently vanish (e.g. a lone early reading, or a
+ * value left after a mid-series de-spike). Dense lines stay dot-free.
+ */
+export function isolatedDot(values: (number | null)[], color: string, r = 2.5) {
+  // Recharts requires the render fn to return an element for every point, so
+  // non-isolated points get an empty (invisible) <g/>.
+  return function IsolatedDot(props: any): React.ReactElement {
+    const { cx, cy, index, key } = props ?? {};
+    const idx = typeof index === "number" ? index : -1;
+    const prev = idx > 0 ? values[idx - 1] : null;
+    const next = idx >= 0 && idx < values.length - 1 ? values[idx + 1] : null;
+    const isolated = idx >= 0 && values[idx] != null && prev == null && next == null;
+    if (isolated && cx != null && cy != null) {
+      return <circle key={key} cx={cx} cy={cy} r={r} fill={color} />;
+    }
+    return <g key={key} />;
+  };
+}
+
 /** A period is a "major" tick if it is a plain year or the first quarter (1Q). */
 export function isMajor(period: string): boolean {
   return /^\d{4}$/.test(period) || period.startsWith("1Q");

@@ -6,7 +6,7 @@ import type { ChartData } from "../../data/datasets";
 import { colorFor, t } from "../../theme";
 import { WidgetCard, type Category } from "../WidgetCard";
 import {
-  CategoryTick, ChartLegend, ChartTooltip, DataTable, toRows, useChartView, ViewToggle,
+  CategoryTick, ChartLegend, ChartTooltip, DataTable, isolatedDot, toRows, useChartView, ViewToggle,
 } from "./common";
 
 export function ShareLineChart({
@@ -85,7 +85,7 @@ export function ShareLineChart({
                       dataKey={s.name}
                       stroke={colorFor(s.name)}
                       strokeWidth={isHi ? 3 : 1.8}
-                      dot={false}
+                      dot={isolatedDot(s.values, colorFor(s.name))}
                       activeDot={{ r: isHi ? 5 : 4, strokeWidth: 0 }}
                       connectNulls={false}
                       isAnimationActive={false}
