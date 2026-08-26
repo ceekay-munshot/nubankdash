@@ -62,6 +62,7 @@ All series are bundled in [`src/data/datasets.ts`](src/data/datasets.ts) and
 typed. Regenerate with:
 
 ```bash
+python3 -m pip install -r scratchpad/requirements.txt       # once
 python3 scratchpad/parse.py path/to/Nu_Brazil.xlsx          # rewrite both files
 python3 scratchpad/parse.py path/to/Nu_Brazil.xlsx --check  # audit only
 ```

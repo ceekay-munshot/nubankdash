@@ -84,12 +84,35 @@ const rising = (d: ChartData, name: string) => {
 const peak = (d: ChartData, name: string) =>
   Math.max(...(seriesByName(d, name)?.values ?? []).filter((v): v is number => v != null));
 
-/** Latest value of every name, ranked high -> low. */
-const rank = (d: ChartData, names: { label: string; key: string }[]) =>
-  names
-    .map((n) => ({ ...n, v: lv(d, n.key) }))
-    .filter((n): n is { label: string; key: string; v: number } => n.v != null)
-    .sort((a, b) => b.v - a.v);
+/**
+ * A cross-entity snapshot taken at ONE period: the latest period where `anchor`
+ * reports. Every other entity is read at that same index rather than at its own
+ * latest, so a "latest quarter" ranking can never mix quarters — a real risk
+ * now that a lender can be nulled in the newest quarter for reporting too few
+ * weekly readings. Anyone absent at that period is listed in `missing` so the
+ * copy can say so instead of quietly back-filling an older number.
+ */
+function panel(d: ChartData, anchor: string, names: { label: string; key: string }[]) {
+  const vals = seriesByName(d, anchor)?.values ?? [];
+  let i = -1;
+  for (let k = vals.length - 1; k >= 0; k--) if (vals[k] != null) { i = k; break; }
+  const rows: { label: string; key: string; v: number }[] = [];
+  const missing: string[] = [];
+  for (const n of names) {
+    const v = i >= 0 ? seriesByName(d, n.key)?.values[i] : null;
+    if (v == null) missing.push(n.label);
+    else rows.push({ ...n, v });
+  }
+  return {
+    period: i >= 0 ? d.periods[i] : "–",
+    rows,
+    missing,
+    ranked: [...rows].sort((a, b) => b.v - a.v),
+    mean: rows.length ? rows.reduce((s, r) => s + r.v, 0) / rows.length : NaN,
+    /** " (no X reading this quarter)" — empty when everyone reported. */
+    note: missing.length ? ` (no ${missing.join(", ")} reading this quarter)` : "",
+  };
+}
 
 const INCUMBENTS = [
   { label: "Itaú", key: "Itaú" },
@@ -127,8 +150,9 @@ function buildVerdicts(): { npl: Verdict; early: Verdict; peer: Verdict; househo
   // --- Peer NPL (whole bank). Nu is now in the workbook, so the chart can
   // finally answer with Nu itself rather than using Inter as a stand-in.
   const nu = lv(peerNpl, "Nu")!;
-  const inter = lv(peerNpl, "Inter")!;
-  const incs = INCUMBENTS.map((i) => ({ ...i, v: lv(peerNpl, i.key)! }));
+  const peerPanel = panel(peerNpl, "Nu", [...INCUMBENTS, { label: "Inter", key: "Inter" }]);
+  const inter = peerPanel.rows.find((r) => r.key === "Inter")?.v ?? lv(peerNpl, "Inter")!;
+  const incs = peerPanel.rows.filter((r) => r.key !== "Inter");
   const worstInc = incs.reduce((a, b) => (b.v > a.v ? b : a));
   const bestInc = incs.reduce((a, b) => (b.v < a.v ? b : a));
   const nuAbove = nu > worstInc.v;
@@ -136,34 +160,36 @@ function buildVerdicts(): { npl: Verdict; early: Verdict; peer: Verdict; househo
   // --- Household segment: the like-for-like read, because the incumbents'
   // whole-bank ratio is diluted by mortgages and corporate lending.
   const nuHh = lv(householdNpl, "Nu")!;
-  const hhIncs = HH_INCUMBENTS.map((i) => ({ ...i, v: lv(householdNpl, i.key)! }));
+  const hhPanel = panel(householdNpl, "Nu", HH_INCUMBENTS);
+  const hhIncs = hhPanel.rows;
   const hhWorst = hhIncs.reduce((a, b) => (b.v > a.v ? b : a));
-  const mean = (xs: { v: number }[]) => xs.reduce((a, b) => a + b.v, 0) / xs.length;
-  const bankAvg = mean(incs);
-  const hhAvg = mean(hhIncs);
+  const bankAvg = incs.reduce((a, b) => a + b.v, 0) / incs.length;
+  const hhAvg = hhPanel.mean;
   const headlinePrem = nu - bankAvg;
   const likeForLike = nuHh - hhAvg;
   const mixShare = (100 * (headlinePrem - likeForLike)) / headlinePrem;
   const hhAt = lp(householdNpl, "Nu");
 
   // --- Pricing: what each bank charges for the same product.
-  const rateRanked = rank(personalLoanRate, [
+  const ratePanel = panel(personalLoanRate, "Nu", [
     { label: "Nu", key: "Nu" },
     ...INCUMBENTS.map((i) => ({ label: i.label, key: i.label })),
     { label: "Caixa", key: "Caixa" },
   ]);
+  const rateRanked = ratePanel.ranked;
   const nuRate = lv(personalLoanRate, "Nu")!;
-  const itRate = lv(personalLoanRate, "Itaú")!;
-  const rateAt = lp(personalLoanRate, "Nu");
+  const itRate = ratePanel.rows.find((r) => r.key === "Itaú")?.v ?? lv(personalLoanRate, "Itaú")!;
+  const rateAt = ratePanel.period;
   const nuRatePos = rateRanked.findIndex((r) => r.key === "Nu") + 1;
 
   // --- Cost of risk: what those loans actually lose, per year. Same unit as
   // the rate above, so the two charts read as one trade.
   const nuCor = lv(costOfRisk, "Nu")!;
-  const corIncs = INCUMBENTS.map((i) => ({ ...i, v: lv(costOfRisk, i.key)! }));
-  const corAvg = corIncs.reduce((a, b) => a + b.v, 0) / corIncs.length;
-  const corAt = lp(costOfRisk, "Nu");
-  const itCor = lv(costOfRisk, "Itaú")!;
+  const corPanel = panel(costOfRisk, "Nu", INCUMBENTS);
+  const corIncs = corPanel.rows;
+  const corAvg = corPanel.mean;
+  const corAt = corPanel.period;
+  const itCor = corIncs.find((r) => r.key === "Itaú")?.v ?? lv(costOfRisk, "Itaú")!;
 
   return {
     npl: {
@@ -182,21 +208,21 @@ function buildVerdicts(): { npl: Verdict; early: Verdict; peer: Verdict; househo
     },
     household: {
       answer: `Like-for-like Nu's premium is ${signed(likeForLike)}pp, not ${signed(headlinePrem)}pp — ${mixShare.toFixed(0)}% of the headline gap was book mix.`,
-      detail: `On household books only (${hhAt}), Nu runs ${fmt(nuHh)} against ${hhIncs.map((i) => `${i.label} ${fmt(i.v)}`).join(" · ")} — an average of ${fmt(hhAvg)}, versus ${fmt(bankAvg)} for the same three banks whole-bank. Nu is still the highest of the four, but by ${signed(nuHh - hhWorst.v)}pp over ${hhWorst.label} rather than the ${signed(nu - worstInc.v)}pp the chart above implies.`,
+      detail: `On household books only (${hhAt})${hhPanel.note}, Nu runs ${fmt(nuHh)} against ${hhIncs.map((i) => `${i.label} ${fmt(i.v)}`).join(" · ")} — an average of ${fmt(hhAvg)}, versus ${fmt(bankAvg)} for the same three banks whole-bank. Nu is still the highest of the four, but by ${signed(nuHh - hhWorst.v)}pp over ${hhWorst.label} rather than the ${signed(nu - worstInc.v)}pp the chart above implies.`,
     },
     rate: {
       answer:
         nuRatePos === 1
           ? `Yes — Nu charges the most of the five, ${fmt(nuRate)} a.a. against Itaú's ${fmt(itRate)}.`
           : `Nu is #${nuRatePos} of five on price, ${fmt(nuRate)} a.a. against Itaú's ${fmt(itRate)}.`,
-      detail: `Latest quarter (${rateAt}), non-payroll personal loans: ${rateRanked.map((r) => `${r.label} ${fmt(r.v)}`).join(" · ")}. Nu prices ${(nuRate / itRate).toFixed(2)}× Itaú — the revenue side of the extra default risk in the charts above.`,
+      detail: `Latest quarter (${rateAt})${ratePanel.note}, non-payroll personal loans: ${rateRanked.map((r) => `${r.label} ${fmt(r.v)}`).join(" · ")}. Nu prices ${(nuRate / itRate).toFixed(2)}× Itaú — the revenue side of the extra default risk in the charts above.`,
     },
     cor: {
       answer: `Nu loses ${fmt(nuCor)} of its book a year to credit — ${signed(nuCor - itCor)}pp more than Itaú, against a ${signed(nuRate - itRate)}pp pricing premium.`,
       // The two premiums sit on different portfolios (one product's APR vs the
       // whole book's provisions), so they are shown side by side and never
       // divided into a cover ratio.
-      detail: `Cost of risk (${corAt}) = annualised provisions ÷ loans. Nu ${fmt(nuCor)} vs an incumbent average of ${fmt(corAvg)} (${corIncs.map((i) => `${i.label} ${fmt(i.v)}`).join(" · ")}). Nu's pricing premium over Itaú on personal loans is the larger of the two figures, but it is measured on one product's new lending while cost of risk spans the whole book — read them together, not as a ratio.`,
+      detail: `Cost of risk (${corAt})${corPanel.note} = annualised provisions ÷ loans. Nu ${fmt(nuCor)} vs an incumbent average of ${fmt(corAvg)} (${corIncs.map((i) => `${i.label} ${fmt(i.v)}`).join(" · ")}). Nu's pricing premium over Itaú on personal loans is the larger of the two figures, but it is measured on one product's new lending while cost of risk spans the whole book — read them together, not as a ratio.`,
     },
   };
 }

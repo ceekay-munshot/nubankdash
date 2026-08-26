@@ -82,6 +82,31 @@ function trough(d: ChartData, name: string, window = 12): { period: string; valu
   return { period: d.periods[bi], value: vals[bi]! };
 }
 
+/**
+ * A cross-entity snapshot taken at ONE period: the latest period where `anchor`
+ * reports. Every other entity is read at that same index — never at its own
+ * latest — so a ranking or an average can never silently mix quarters. An
+ * entity with no reading there is returned in `missing` for disclosure instead
+ * of being back-filled from an older quarter.
+ */
+function panel(d: ChartData, anchor: string, names: string[]) {
+  const i = lastIdx(d, anchor);
+  const rows: { name: string; value: number }[] = [];
+  const missing: string[] = [];
+  for (const n of names) {
+    const v = ser(d, n)[i];
+    if (v === null || v === undefined) missing.push(n);
+    else rows.push({ name: n, value: v });
+  }
+  const mean = rows.length ? rows.reduce((sum, r) => sum + r.value, 0) / rows.length : NaN;
+  const of = (name: string) => {
+    const r = rows.find((x) => x.name === name);
+    if (!r) throw new Error(`${name} @ ${d.periods[i]} missing`);
+    return r.value;
+  };
+  return { period: d.periods[i], rows, missing, mean, of };
+}
+
 /** "1Q26" -> "1Q"; used to compare a quarter with the same quarter of other years. */
 const quarterOf = (period: string) => (/^\dQ/.test(period) ? period.slice(0, 2) : "");
 
@@ -647,12 +672,13 @@ function insightHouseholdLikeForLike(): Insight {
     { label: "Santander", bank: "Santander Brasil", hh: "Santander" },
     { label: "Bradesco", bank: "Bradesco", hh: "Bradesco" },
   ];
+  const bankPanel = panel(peerNpl, "Nu", INC.map((i) => i.bank));
+  const hhPanel = panel(householdNpl, "Nu", INC.map((i) => i.hh));
   const nuBank = last(peerNpl, "Nu");
   const nuHh = last(householdNpl, "Nu");
-  const bank = INC.map((i) => ({ ...i, v: last(peerNpl, i.bank).value }));
-  const hh = INC.map((i) => ({ ...i, v: last(householdNpl, i.hh).value }));
-  const avg = (xs: { v: number }[]) => xs.reduce((s, x) => s + x.v, 0) / xs.length;
-  const bankAvg = avg(bank), hhAvg = avg(hh);
+  const bank = INC.map((i) => ({ ...i, v: bankPanel.of(i.bank) }));
+  const hh = INC.map((i) => ({ ...i, v: hhPanel.of(i.hh) }));
+  const bankAvg = bankPanel.mean, hhAvg = hhPanel.mean;
   const headline = nuBank.value - bankAvg;
   const likeForLike = nuHh.value - hhAvg;
   const mixEffect = headline - likeForLike;
@@ -704,14 +730,16 @@ function insightHouseholdLikeForLike(): Insight {
 // so they are reported side by side and deliberately never divided into a
 // "cover ratio" — that number would describe an asset neither bank holds.
 function insightPriceOfRisk(): Insight {
+  const ratePanel = panel(personalLoanRate, "Nu", ["Itaú", "Bradesco", "Santander", "Caixa"]);
+  const corPanel = panel(costOfRisk, "Nu", ["Itaú", "Santander Brasil", "Bradesco"]);
   const nuRate = last(personalLoanRate, "Nu");
-  const itRate = last(personalLoanRate, "Itaú");
-  const others = ["Itaú", "Bradesco", "Santander", "Caixa"].map((b) => ({ b, v: last(personalLoanRate, b).value }));
-  const rateAvg = others.reduce((s, x) => s + x.v, 0) / others.length;
+  const itRate = { value: ratePanel.of("Itaú"), period: ratePanel.period };
+  const others = ratePanel.rows.map((r) => ({ b: r.name, v: r.value }));
+  const rateAvg = ratePanel.mean;
   const nuCor = last(costOfRisk, "Nu");
-  const itCor = last(costOfRisk, "Itaú");
-  const corOthers = ["Itaú", "Santander Brasil", "Bradesco"].map((b) => ({ b, v: last(costOfRisk, b).value }));
-  const corAvg = corOthers.reduce((s, x) => s + x.v, 0) / corOthers.length;
+  const itCor = { value: corPanel.of("Itaú"), period: corPanel.period };
+  const corOthers = corPanel.rows.map((r) => ({ b: r.name, v: r.value }));
+  const corAvg = corPanel.mean;
   const priceGap = nuRate.value - itRate.value;
   const lossGap = nuCor.value - itCor.value;
   const first = { period: personalLoanRate.periods[0], nu: ser(personalLoanRate, "Nu")[0], it: ser(personalLoanRate, "Itaú")[0] };
@@ -719,9 +747,9 @@ function insightPriceOfRisk(): Insight {
 
   const steps: CalcStep[] = [
     { label: "What Nu charges for a personal loan", math: "BCB weekly rate, averaged over the quarter", result: `${f(nuRate.value)}% a.a.`, source: `${SHEETS.rates} · ${nuRate.period}` },
-    { label: "What the big four charge for the same product", math: others.map((o) => `${o.b} ${f(o.v)}%`).join(" · "), result: `average ${f(rateAvg)}% a.a. → Nu prices ${signed(nuRate.value - rateAvg)}pp above them`, source: `${SHEETS.rates} · ${nuRate.period}` },
+    { label: "What the big four charge for the same product", math: others.map((o) => `${o.b} ${f(o.v)}%`).join(" · "), result: `average ${f(rateAvg)}% a.a. → Nu prices ${signed(nuRate.value - rateAvg)}pp above them`, source: `${SHEETS.rates} · ${ratePanel.period}${ratePanel.missing.length ? ` (no ${ratePanel.missing.join(", ")} reading this quarter)` : ""}` },
     { label: "What Nu's credit losses cost it, per year", math: "cost of risk = annualised provisions ÷ loans", result: `${f(nuCor.value)}% a.a.`, source: `${SHEETS.aq} · Cost of risk · ${nuCor.period}` },
-    { label: "…and what they cost the incumbents", math: corOthers.map((o) => `${o.b === "Santander Brasil" ? "Santander" : o.b} ${f(o.v)}%`).join(" · "), result: `average ${f(corAvg)}% a.a.`, source: `${SHEETS.aq} · Cost of risk · ${nuCor.period}` },
+    { label: "…and what they cost the incumbents", math: corOthers.map((o) => `${o.b === "Santander Brasil" ? "Santander" : o.b} ${f(o.v)}%`).join(" · "), result: `average ${f(corAvg)}% a.a.`, source: `${SHEETS.aq} · Cost of risk · ${corPanel.period}${corPanel.missing.length ? ` (no ${corPanel.missing.join(", ")} reading this quarter)` : ""}` },
     { label: "The two premiums over Itaú, side by side", math: `price ${signed(priceGap)}pp a.a. on personal loans  ·  cost of risk ${signed(lossGap)}pp a.a. on the whole book`, result: `the price premium is the larger of the two, by ${f(priceGap - lossGap)}pp` },
     { label: "Why these are NOT divided into a cover ratio", math: "the rate is one product's APR on new lending; cost of risk spans every product each bank holds", result: "different portfolios — a ratio would describe an asset neither bank has" },
     { label: "Has the price premium always been there?", math: `${first.period}: Nu ${f(first.nu ?? 0)}% vs Itaú ${f(first.it ?? 0)}% → ${nuRate.period}: Nu ${f(nuRate.value)}% vs Itaú ${f(itRate.value)}%`, result: `${widened >= 0 ? "widened" : "narrowed"} from ${signed((first.nu ?? 0) - (first.it ?? 0))}pp to ${signed(priceGap)}pp` },

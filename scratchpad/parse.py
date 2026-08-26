@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Regenerate src/data/datasets.ts and src/data/absolutes.ts from the Nu Brazil workbook.
 
+Setup (once):
+    python3 -m pip install -r scratchpad/requirements.txt
+
 Usage:
     python3 scratchpad/parse.py path/to/Nu_Brazil.xlsx [--check]
 
@@ -28,7 +31,13 @@ import sys
 import zipfile
 from pathlib import Path
 
-import openpyxl
+try:
+    import openpyxl
+except ModuleNotFoundError:  # pragma: no cover - setup guidance, not logic
+    raise SystemExit(
+        "openpyxl is required. Install the regenerator's dependencies with:\n"
+        "    python3 -m pip install -r scratchpad/requirements.txt"
+    )
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "src" / "data"
