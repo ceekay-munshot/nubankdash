@@ -9,6 +9,7 @@ import type { Insight } from "../../insights/types";
 import { t, font } from "../../theme";
 import { EvidenceChart } from "./EvidenceChart";
 import { KindBadge } from "./InsightCard";
+import { WORKBOOK } from "../../data/datasets";
 
 const mono = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
 
@@ -145,7 +146,7 @@ export function InsightModal({ insight, onClose }: { insight: Insight; onClose: 
           </div>
 
           <div style={{ fontSize: 11, color: t.textHint, borderTop: `1px solid ${t.border}`, paddingTop: 10 }}>
-            Every number above is computed live from the bundled workbook series (Nu_Brazil.xlsx, 05.20.2026) — the same data behind the Overview charts. Analytics, not investment advice.
+            Every number above is computed live from the bundled workbook series ({WORKBOOK}) — the same data behind the Overview charts. Analytics, not investment advice.
           </div>
         </div>
       </div>

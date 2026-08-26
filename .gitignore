@@ -29,3 +29,7 @@ logs
 *.njsproj
 *.sln
 *.sw?
+
+# python bytecode
+__pycache__/
+*.pyc

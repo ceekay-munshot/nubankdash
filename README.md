@@ -9,19 +9,29 @@ SDK** (session token + selected ticker are supplied by the host).
 
 **Market share** (Nu vs Brazilian banks, time series)
 
-- **Credit-card loans** — Nu ~15% of the system, from near-zero in 2018
+- **Credit-card loans** — Nu ~16% of the system (1Q26), from ~3% in 2019
 - **Card TPV** — Nu is the #2 issuer by payment volume (~24%)
-- **Unsecured loans** — Nu's fastest-growing book (~14%)
-- **Payroll loans** — Nu's newest entry, still <1% of a bank-dominated market
+- **Unsecured loans** — Nu's fastest-growing book (~15%)
+- **Payroll loans** — Nu's newest entry, still well under 1% of a bank-dominated market
 
 **Asset quality** (system credit cycle & peer risk, NPL %, trend charts)
 
-- **System NPL by product** — card & personal NPLs rising again; payroll structurally clean
+- **System NPL by product** — card & personal NPLs at cycle highs; payroll ~3× cleaner
 - **System early NPL by product** — the leading indicator (short-dated arrears)
-- **Peer NPL ratio** — Itaú / Santander / Bradesco / Inter, i.e. are digital banks taking worse risk?
+- **Peer NPL ratio — whole bank** — Nu vs Itaú / Santander / Bradesco / Inter
+- **Peer NPL ratio — household books only** — the like-for-like read. Nu lends
+  almost only to households; the incumbents' whole-bank ratio is diluted by
+  mortgages and corporate loans, which is worth ~1.6pp of the apparent gap
+
+**Pricing** (what each bank charges, and what the lending costs)
+
+- **Personal-loan interest rate** — BCB weekly rate on non-payroll, pre-fixed
+  personal loans (% a.a.), averaged into quarters
+- **Cost of risk** — annualised provisions ÷ loans (% a.a.), the same unit as the
+  rate above, which is what makes the price-of-risk comparison possible
 
 Every chart has a view toggle (**Chart / Table**, or **Trend / Bars / Table** on
-the asset-quality charts — the accessible table view is also the relief channel
+the asset-quality and pricing charts — the accessible table view is also the relief channel
 for low-contrast series), a crosshair tooltip, and a legend that shows each
 entity's latest value.
 
@@ -30,28 +40,87 @@ entity's latest value.
 The header's **Overview | Insights** switch opens a second view: nuanced,
 buy-side-oriented findings computed at load time by the insight engine
 ([`src/insights/engine.ts`](src/insights/engine.ts)) from the same bundled
-series — e.g. the TPV-vs-credit monetization gap, the 2Q25 record share grab in
-a shrinking market, mix-weighted NPL exposure vs incumbents, and the measured
-(not assumed) early-NPL lead-lag. Clicking any card opens a transparency modal
-with the source sheets, every arithmetic step shown with the real values, the
-one-line formula, an evidence chart, and the caveats. No insight number is
-hardcoded; if the data changes, the insights recompute (and an insight whose
-inputs disappear is skipped rather than crashing).
+series — e.g. the TPV-vs-credit monetization gap, the record share grab in a
+shrinking market, mix-weighted NPL exposure vs incumbents, the like-for-like
+household default premium, the price-of-risk cover ratio, and the measured (not
+assumed) early-NPL lead-lag. Clicking any card opens a transparency modal with
+the source sheets, every arithmetic step shown with the real values, the one-line
+formula, an evidence chart, and the caveats.
+
+No insight number is hardcoded, and neither is any **period**: every window is
+expressed relative to the newest reading (`last`, `back(n)`, `trough`), and the
+"record share grab" insight locates its own record quarter and skips itself if
+that quarter no longer happened in a shrinking market. If the data changes, the
+insights recompute; an insight whose inputs disappear is skipped rather than
+crashing the app.
 
 ## Data
 
-All series are bundled in [`src/data/datasets.ts`](src/data/datasets.ts),
-generated from the `Nu_Brazil.xlsx` (05.20.2026) workbook exports. Notes on method:
+All series are bundled in [`src/data/datasets.ts`](src/data/datasets.ts) and
+[`src/data/absolutes.ts`](src/data/absolutes.ts), generated from the
+`Nu_Brazil.xlsx` (08.24.2026) workbook — the edition stamp is derived, not
+typed. Regenerate with:
+
+```bash
+python3 -m pip install -r scratchpad/requirements.txt       # once
+python3 scratchpad/parse.py path/to/Nu_Brazil.xlsx          # rewrite both files
+python3 scratchpad/parse.py path/to/Nu_Brazil.xlsx --check  # audit only
+```
+
+Both modes **fail closed** — they print the problem and exit non-zero, and the
+write mode refuses to write anything — in two cases:
+
+- a balance the parser judges implausible for a loan stock that is *not* in the
+  documented de-spike list, so a bad cell cannot reach the dashboard just
+  because nobody read stdout; and
+- a de-spike that has gone **stale**: each listed coordinate is re-validated
+  leave-one-out against the refreshed workbook, so if a later edition corrects
+  one of these cells the parser refuses to keep nulling a good value.
+
+The workbook **edition** is derived at generation time (from the filename, or
+the document's own last-modified date) and emitted as `WORKBOOK`, which the
+provenance card and the insight modal import — a refresh cannot leave the
+dashboard describing new data as though it came from the previous workbook.
+
+Notes on method:
 
 - **Nu** is the sum of its two Brazilian legal entities (Nu Pagamentos + Nu
-  Financeira) in every loan section — this reproduces the published Nu share.
-- **Loan share** = entity balance ÷ system total (IF.data).
+  Financeira) in every loan section. Which of the two rows carries the balance
+  moved in 1Q25, so the parser always adds both.
+- **Loan share** = entity balance ÷ the sheet's own system total (IF.data), never
+  a sum of the listed banks — so one bad cell cannot move Nu's share.
 - **TPV share** = issuer card TPV (R$ bn) ÷ the 8 tracked issuers.
 - **Asset-quality** series are the published system / peer NPL ratios (%).
-- Obvious source keystroke outliers (e.g. an unsecured balance keyed as `24` for
-  ~24,000, or a credit-card balance of `417390`) are de-spiked to `null` so they
-  don't distort the trend. Regenerate with `scratchpad/parse.py` if the workbook
-  changes.
+- **Rates** are the BCB weekly personal-loan series, averaged into calendar
+  quarters. A quarter is dropped if it holds fewer than 6 weekly readings, and a
+  lender's own value is dropped if *that lender* reported fewer than 6 times in
+  it — an otherwise complete quarter can still be near-empty for one bank.
+- Source keystroke outliers (an unsecured balance keyed as `24` for ~26,000, a
+  credit-card balance of `417390`, a cell duplicated from the row above) are
+  de-spiked to `null`. The detector re-runs over the whole workbook on every
+  invocation and each documented de-spike is independently re-detected when
+  removed from the list, so the list cannot rot and a new bad cell cannot slip
+  through silently.
+- Where the workbook is **missing** one tracked issuer's card TPV for a quarter
+  (Caixa, 3Q25 and 2Q26 in this edition), that issuer's own share is `null` and
+  the denominator is repaired by interpolation — otherwise the missing ~9% of
+  volume would silently inflate all seven issuers that did report. A quarter with
+  no later reading to interpolate from is dropped entirely. The parser emits what
+  it did as `tpvHoles`, and the in-app "Sources & method" card reports it from
+  there — a dropped quarter is invisible if you try to re-derive it from the
+  published shares.
+
+### Restatements in this edition vs the 05.20.2026 workbook
+
+- System **personal-loan** NPL and early-NPL were restated across the whole
+  history (+0.4 to +0.8pp on the 90-day series); household early NPL was restated
+  down in the pre-2020 years.
+- Nu's **payroll** balance for 4Q25 was revised from 6,791 to 4,098 R$ mn — which
+  is why the payroll insight now headlines a four-quarter growth rate rather than
+  a single quarter.
+- Card TPV values moved by ~0.1pp across most quarters.
+- Nu's pre-2019 loan shares are now `null` rather than `0`: the workbook reports
+  `-` for those years, and `0` asserted something the source does not say.
 
 ## Munshot SDK / host integration
 

@@ -15,7 +15,8 @@
 
 import {
   creditCardShare, tpvShare, unsecuredShare, payrollShare,
-  systemNpl, systemEarlyNpl, peerNpl, type ChartData,
+  systemNpl, systemEarlyNpl, peerNpl, householdNpl, personalLoanRate, costOfRisk,
+  type ChartData,
 } from "../data/datasets";
 import { loanAbsCreditCard, loanAbsUnsecured, loanAbsPayroll } from "../data/absolutes";
 import type { CalcStep, Insight } from "./types";
@@ -38,15 +39,76 @@ function at(d: ChartData, name: string, period: string): number {
   return v;
 }
 
-/** Latest non-null value with its period label. */
-function last(d: ChartData, name: string): { period: string; value: number } {
+/** Index of the latest non-null reading. */
+function lastIdx(d: ChartData, name: string): number {
   const vals = ser(d, name);
-  for (let i = vals.length - 1; i >= 0; i--) {
-    const v = vals[i];
-    if (v !== null && v !== undefined) return { period: d.periods[i], value: v };
-  }
+  for (let i = vals.length - 1; i >= 0; i--) if (vals[i] !== null && vals[i] !== undefined) return i;
   throw new Error(`series empty: ${name}`);
 }
+
+/** Latest non-null value with its period label. */
+function last(d: ChartData, name: string): { period: string; value: number } {
+  const i = lastIdx(d, name);
+  return { period: d.periods[i], value: ser(d, name)[i]! };
+}
+
+/**
+ * The reading `k` periods before the latest one. Every window in this file is
+ * expressed this way rather than as a literal quarter, so a refreshed workbook
+ * moves the whole analysis forward instead of silently freezing it in the past.
+ */
+function back(d: ChartData, name: string, k: number): { period: string; value: number } {
+  const i = lastIdx(d, name) - k;
+  const v = i >= 0 ? ser(d, name)[i] : null;
+  if (v === null || v === undefined) throw new Error(`${name} @ latest-${k} missing`);
+  return { period: d.periods[i], value: v };
+}
+
+/**
+ * The most recent trough: the lowest reading in the trailing `window` periods.
+ * Used instead of a hardcoded "the cycle bottomed in 3Q24" so the claim keeps
+ * pointing at the real low as new quarters arrive.
+ */
+function trough(d: ChartData, name: string, window = 12): { period: string; value: number } {
+  const vals = ser(d, name);
+  const end = lastIdx(d, name);
+  let bi = -1;
+  for (let i = Math.max(0, end - window + 1); i <= end; i++) {
+    const v = vals[i];
+    if (v === null || v === undefined) continue;
+    if (bi < 0 || v < vals[bi]!) bi = i;
+  }
+  if (bi < 0) throw new Error(`no trough: ${name}`);
+  return { period: d.periods[bi], value: vals[bi]! };
+}
+
+/**
+ * A cross-entity snapshot taken at ONE period: the latest period where `anchor`
+ * reports. Every other entity is read at that same index — never at its own
+ * latest — so a ranking or an average can never silently mix quarters. An
+ * entity with no reading there is returned in `missing` for disclosure instead
+ * of being back-filled from an older quarter.
+ */
+function panel(d: ChartData, anchor: string, names: string[]) {
+  const i = lastIdx(d, anchor);
+  const rows: { name: string; value: number }[] = [];
+  const missing: string[] = [];
+  for (const n of names) {
+    const v = ser(d, n)[i];
+    if (v === null || v === undefined) missing.push(n);
+    else rows.push({ name: n, value: v });
+  }
+  const mean = rows.length ? rows.reduce((sum, r) => sum + r.value, 0) / rows.length : NaN;
+  const of = (name: string) => {
+    const r = rows.find((x) => x.name === name);
+    if (!r) throw new Error(`${name} @ ${d.periods[i]} missing`);
+    return r.value;
+  };
+  return { period: d.periods[i], rows, missing, mean, of };
+}
+
+/** "1Q26" -> "1Q"; used to compare a quarter with the same quarter of other years. */
+const quarterOf = (period: string) => (/^\dQ/.test(period) ? period.slice(0, 2) : "");
 
 const f = (x: number, dp = 1) => x.toFixed(dp);
 const signed = (x: number, dp = 1) => `${x >= 0 ? "+" : ""}${x.toFixed(dp)}`;
@@ -80,22 +142,24 @@ const SHEETS = {
   loans: "Loans sheet (IF.data balances, R$ mn)",
   tpv: "TPV Market share sheet (R$ bn card volumes)",
   aq: "Asset quality sheet (NPL ratios, %)",
+  hh: "Asset Quality (household) sheet (household-book NPL, %)",
+  rates: "Personal Loans - Interest rates sheet (BCB weekly, % a.a.)",
 };
 
 // ---------------------------------------------------------------------------
 // A. Monetization gap — TPV share vs card-loan share
 // ---------------------------------------------------------------------------
 function insightMonetizationGap(): Insight {
-  const nuTpv = last(tpvShare, "Nu");                 // 1Q26
+  const nuTpv = last(tpvShare, "Nu");
   const itTpv = last(tpvShare, "Itaú");
-  const nuLoan = last(creditCardShare, "Nu");         // 4Q25
+  const nuLoan = last(creditCardShare, "Nu");
   const itLoan = last(creditCardShare, "Itaú");
   const rNu = nuLoan.value / nuTpv.value;
   const rIt = itLoan.value / itTpv.value;
   const implied = nuTpv.value * rIt;
   const gapPp = implied - nuLoan.value;
-  const sysCard = last(loanAbsCreditCard, "System").value; // R$ mn, 4Q25
-  const latentMn = (gapPp / 100) * sysCard;
+  const sysCard = last(loanAbsCreditCard, "System"); // R$ mn, latest loan quarter
+  const latentMn = (gapPp / 100) * sysCard.value;
 
   // conversion-ratio trend (quarterly era, where both series have the period)
   const qs = creditCardShare.periods.filter((p) => /Q/.test(p) && tpvShare.periods.includes(p));
@@ -111,7 +175,7 @@ function insightMonetizationGap(): Insight {
     { label: "Nu's 'spending → lending' conversion rate", math: `${f(nuLoan.value)} ÷ ${f(nuTpv.value)}`, result: f(rNu, 2) },
     { label: "Itaú's conversion rate — the benchmark to beat", math: `${f(itLoan.value)} ÷ ${f(itTpv.value)}`, result: f(rIt, 2) },
     { label: "Nu's lending share IF it converted spending like Itaú does", math: `${f(nuTpv.value)} × ${f(rIt, 2)}`, result: `${f(implied)}%` },
-    { label: "That gap, turned into money", math: `(${f(implied)} − ${f(nuLoan.value)})% × ${bn(sysCard, 0)} total card-loan market`, result: `≈ ${bn(latentMn, 0)}`, source: `${SHEETS.loans} · Total · 4Q25` },
+    { label: "That gap, turned into money", math: `(${f(implied)} − ${f(nuLoan.value)})% × ${bn(sysCard.value, 0)} total card-loan market`, result: `≈ ${bn(latentMn, 0)}`, source: `${SHEETS.loans} · Total · ${sysCard.period}` },
   ];
 
   return {
@@ -127,7 +191,9 @@ function insightMonetizationGap(): Insight {
     steps,
     caveats: [
       "Card spending (TPV) includes debit and prepaid purchases; Nu's customers use debit a lot, so part of the gap may never convert into loans.",
-      `The two readings are one quarter apart (spending is ${nuTpv.period}, lending is ${nuLoan.period}).`,
+    ...(nuTpv.period === nuLoan.period
+      ? []
+      : [`The two readings are a quarter apart (spending is ${nuTpv.period}, lending is ${nuLoan.period}) — card volumes publish before IF.data balances.`]),
       "Itaú's conversion rate is boosted by corporate and premium cards Nu doesn't offer (yet).",
     ],
     evidence: {
@@ -147,7 +213,20 @@ function insightMonetizationGap(): Insight {
 // B. 2Q25 — Nu's biggest share grab happened in a shrinking market
 // ---------------------------------------------------------------------------
 function insightShrinkingMarketGrab(): Insight {
-  const P1 = "1Q25", P2 = "2Q25";
+  // Find the record share-grab quarter in the data rather than naming one: a
+  // refreshed workbook can move it, and a hardcoded quarter would quietly turn
+  // the headline into a false claim.
+  const nuShare = ser(creditCardShare, "Nu");
+  const qIdx = creditCardShare.periods.map((p, i) => ({ p, i })).filter((x) => /Q/.test(x.p));
+  let maxJump = -Infinity, maxK = -1;
+  for (let k = 1; k < qIdx.length; k++) {
+    const a = nuShare[qIdx[k - 1].i], b = nuShare[qIdx[k].i];
+    if (a !== null && b !== null && b - a > maxJump) { maxJump = b - a; maxK = k; }
+  }
+  if (maxK < 1) throw new Error("no quarterly share history");
+  const P1 = qIdx[maxK - 1].p, P2 = qIdx[maxK].p;
+  const maxAt = P2;
+
   const sys1 = at(loanAbsCreditCard, "System", P1), sys2 = at(loanAbsCreditCard, "System", P2);
   const nu1 = at(loanAbsCreditCard, "Nu", P1), nu2 = at(loanAbsCreditCard, "Nu", P2);
   const it1 = at(loanAbsCreditCard, "Itaú", P1), it2 = at(loanAbsCreditCard, "Itaú", P2);
@@ -155,21 +234,23 @@ function insightShrinkingMarketGrab(): Insight {
   const sh1 = at(creditCardShare, "Nu", P1), sh2 = at(creditCardShare, "Nu", P2);
   const jump = sh2 - sh1;
 
-  // verify it's the largest QoQ share gain in the quarterly era
-  const nuShare = ser(creditCardShare, "Nu");
-  const qIdx = creditCardShare.periods.map((p, i) => ({ p, i })).filter((x) => /Q/.test(x.p));
-  let maxJump = -Infinity, maxAt = "";
-  for (let k = 1; k < qIdx.length; k++) {
-    const a = nuShare[qIdx[k - 1].i], b = nuShare[qIdx[k].i];
-    if (a !== null && b !== null && b - a > maxJump) { maxJump = b - a; maxAt = qIdx[k].p; }
-  }
+  // This insight is specifically "a record grab while the market shrank". If a
+  // future quarter takes the record in a GROWING market the claim no longer
+  // holds, so we skip the card rather than print a half-true headline.
+  if (sys2 >= sys1) throw new Error(`record grab ${P2} happened in a growing market`);
+
+  // The quarters that followed, for the "was it a one-off?" caveat.
+  const after = qIdx.slice(maxK + 1).map((x, n) => {
+    const a = nuShare[qIdx[maxK + n].i], b = nuShare[x.i];
+    return a !== null && b !== null ? `${signed(b - a, 2)}pp` : null;
+  }).filter((x): x is string => x !== null);
 
   const steps: CalcStep[] = [
-    { label: "Brazil's total card loans, 1Q25 → 2Q25", math: `${mn(sys1)} → ${mn(sys2)} (R$ mn)`, result: `${signed(qoq(sys1, sys2))}% — the market SHRANK`, source: `${SHEETS.loans} · Total row` },
+    { label: `Brazil's total card loans, ${P1} → ${P2}`, math: `${mn(sys1)} → ${mn(sys2)} (R$ mn)`, result: `${signed(qoq(sys1, sys2))}% — the market SHRANK`, source: `${SHEETS.loans} · Total row` },
     { label: "Itaú's card loans in that same quarter", math: `${mn(it1)} → ${mn(it2)}`, result: `${signed(qoq(it1, it2))}% — pulling back`, source: `${SHEETS.loans} · Itaú` },
     { label: "Nu's card loans in that same quarter", math: `${mn(nu1)} → ${mn(nu2)}`, result: `${signed(qoq(nu1, nu2))}% — expanding`, source: `${SHEETS.loans} · Nu (both entities)` },
     { label: "What that did to Nu's market share", math: `${f(sh1, 2)}% → ${f(sh2, 2)}%`, result: `${signed(jump, 2)}pp in one quarter` },
-    { label: "Sanity check: compare with every other quarter on record", math: `biggest one-quarter share gain in the data = ${signed(maxJump, 2)}pp, in ${maxAt}`, result: maxAt === P2 ? "2Q25 is the biggest on record" : `biggest was ${maxAt}` },
+    { label: "Sanity check: compare with every other quarter on record", math: `biggest one-quarter share gain across all ${qIdx.length - 1} quarter-on-quarter moves = ${signed(maxJump, 2)}pp`, result: `${maxAt} is the biggest on record` },
   ];
 
   return {
@@ -177,21 +258,23 @@ function insightShrinkingMarketGrab(): Insight {
     kind: "change",
     confidence: "High",
     title: "Nu's biggest share jump ever happened while the card market was shrinking",
-    takeaway: `In 2Q25 Brazil's total card loans fell ${signed(qoq(sys1, sys2))}% and Itaú cut its book ${signed(qoq(it1, it2))}% — yet Nu grew ${signed(qoq(nu1, nu2))}%. Result: Nu's largest single-quarter share gain on record (${signed(jump, 2)}pp).`,
-    stat: { value: `${signed(jump, 2)}pp`, label: "market share gained in one quarter (2Q25) — a record — while the market shrank" },
+    takeaway: `In ${P2} Brazil's total card loans fell ${signed(qoq(sys1, sys2))}% and Itaú cut its book ${signed(qoq(it1, it2))}% — yet Nu grew ${signed(qoq(nu1, nu2))}%. Result: Nu's largest single-quarter share gain on record (${signed(jump, 2)}pp).`,
+    stat: { value: `${signed(jump, 2)}pp`, label: `market share gained in one quarter (${P2}) — a record — while the market shrank` },
     detail: `Growing when the whole market grows proves little — you're just riding the tide. Growing while the market shrinks means Nu was lending exactly when the big banks were pulling back from card risk. Two possible readings: Nu's data lets it spot good borrowers the incumbents can't — or Nu is taking on the risk the incumbents wanted off their books. How Nu's 2025 loans repay over the next year will settle which one it was.`,
     sources: [SHEETS.loans],
-    formula: "growth% = loans(2Q25) ÷ loans(1Q25) − 1;  share change = Nu share(2Q25) − Nu share(1Q25)",
+    formula: `growth% = loans(${P2}) ÷ loans(${P1}) − 1;  share change = Nu share(${P2}) − Nu share(${P1})`,
     steps,
     caveats: [
-      "One quarter's event: the following quarters returned to normal gains (+0.3pp, +0.2pp).",
+      after.length
+        ? `One quarter's event: the quarters since then gained ${after.join(", ")}.`
+        : "One quarter's event — no later quarter to compare it with yet.",
       "Nu merged its two legal entities' reporting in 1Q25; we add both entities in every quarter so the comparison stays apples-to-apples, but some reclassification noise is possible.",
       "When incumbents retreat, Nu's share rises even if Nu changes nothing — the share jump alone doesn't prove Nu got more aggressive.",
     ],
     evidence: {
-      title: "Card-loan growth in 2Q25, bank by bank (% vs previous quarter)",
+      title: `Card-loan growth in ${P2}, bank by bank (% vs previous quarter)`,
       type: "bar",
-      data: cd(["2Q25 QoQ growth"], [
+      data: cd([`${P2} QoQ growth`], [
         { name: "Nu", values: [Math.round(qoq(nu1, nu2) * 10) / 10] },
         { name: "Bradesco", values: [Math.round(qoq(at(loanAbsCreditCard, "Bradesco", P1), at(loanAbsCreditCard, "Bradesco", P2)) * 10) / 10] },
         { name: "BB", values: [Math.round(qoq(at(loanAbsCreditCard, "BB", P1), at(loanAbsCreditCard, "BB", P2)) * 10) / 10] },
@@ -214,33 +297,54 @@ function insightStockNotFlow(): Insight {
   const cur = last(systemNpl, "Credit card loans");
   const curE = last(systemEarlyNpl, "Credit card loans");
   const maxNpl = Math.max(...npl.filter((v): v is number => v !== null));
+  const isRecord = cur.value >= maxNpl - 1e-9;
   const eVals = enpl.filter((v): v is number => v !== null);
   const maxE = Math.max(...eVals);
   const rankE = eVals.slice().sort((a, b) => a - b).findIndex((v) => v >= curE.value) + 1;
-  const yAgo = at(systemEarlyNpl, "Credit card loans", "1Q25");
-  // Q1 seasonal jump, 2023-2026
-  const q1jumps = [23, 24, 25, 26].map((y) => at(systemEarlyNpl, "Credit card loans", `1Q${y}`) - at(systemEarlyNpl, "Credit card loans", `4Q${y - 1}`));
-  const avgQ1 = q1jumps.reduce((s, v) => s + v, 0) / q1jumps.length;
-  const prev = at(systemEarlyNpl, "Credit card loans", "4Q25");
+  const yAgo = back(systemEarlyNpl, "Credit card loans", 4);
+  const prev = back(systemEarlyNpl, "Credit card loans", 1);
+  const yoyE = curE.value - yAgo.value;
+
+  // Seasonality, generalised: how much early NPL usually moves INTO this
+  // quarter-of-the-year, measured across every year in the sheet. (The old
+  // version hardcoded the January effect and broke the moment the latest
+  // reading stopped being a Q1.)
+  const qLabel = quarterOf(curE.period);
+  const curIdx = periods.indexOf(curE.period);
+  const seasonal: number[] = [];
+  periods.forEach((pd, i) => {
+    // Skip the quarter under test: including its own move in the baseline pulls
+    // the benchmark toward the observation and can make an unusual move look
+    // ordinary.
+    if (i === 0 || i === curIdx || quarterOf(pd) !== qLabel) return;
+    const a = enpl[i - 1], b = enpl[i];
+    if (a !== null && b !== null) seasonal.push(b - a);
+  });
+  const avgSeason = seasonal.reduce((s, v) => s + v, 0) / (seasonal.length || 1);
+  const thisMove = curE.value - prev.value;
+
+  // Nu's own product mix, for the "why this matters for Nu" line.
+  const nuC = last(loanAbsCreditCard, "Nu").value;
+  const nuBook = nuC + last(loanAbsUnsecured, "Nu").value + last(loanAbsPayroll, "Nu").value;
 
   const steps: CalcStep[] = [
-    { label: "Card loans gone bad today — 'headline NPL', the water LEVEL in the tub", math: `read straight off the sheet`, result: `${f(cur.value)}% — ties the highest of all ${periods.length} quarters (max = ${f(maxNpl)}%)`, source: `${SHEETS.aq} · System NPL · ${cur.period}` },
+    { label: "Card loans gone bad today — 'headline NPL', the water LEVEL in the tub", math: `read straight off the sheet`, result: isRecord ? `${f(cur.value)}% — the highest of all ${periods.length} quarters` : `${f(cur.value)}% vs the record ${f(maxNpl)}%`, source: `${SHEETS.aq} · System NPL · ${cur.period}` },
     { label: "Loans JUST STARTING to miss payments — 'early NPL', the tap filling it", math: `read straight off the sheet`, result: `${f(curE.value)}%`, source: `${SHEETS.aq} · System early NPL · ${curE.period}` },
-    { label: "Is the tap flowing faster than a year ago?", math: `${f(curE.value)} (1Q26) vs ${f(yAgo)} (1Q25)`, result: `${signed(curE.value - yAgo)}pp — no` },
+    { label: "Is the tap flowing faster than a year ago?", math: `${f(curE.value)} (${curE.period}) vs ${f(yAgo.value)} (${yAgo.period})`, result: `${signed(yoyE)}pp — ${Math.abs(yoyE) < 0.25 ? "essentially unchanged" : yoyE > 0 ? "yes, a little" : "no"}` },
     { label: "Is the tap high by its own history?", math: `sort all ${eVals.length} readings; today ranks #${rankE}`, result: `no — mid-pack (its record is ${f(maxE)}%)` },
-    { label: "Remove the January effect", math: `early NPL always jumps into Q1 (avg ${f(avgQ1, 2)}pp, 2023–26); this year ${f(prev)} → ${f(curE.value)} = ${signed(curE.value - prev)}pp`, result: "this quarter's rise is mostly the usual seasonal pattern" },
+    { label: "Remove the seasonal pattern", math: `early NPL typically moves ${signed(avgSeason, 2)}pp into a ${qLabel} quarter (${seasonal.length} earlier years, this one excluded); this year ${f(prev.value)} → ${f(curE.value)} = ${signed(thisMove)}pp`, result: Math.abs(thisMove - avgSeason) < 0.25 ? "this quarter's move is the usual seasonal pattern" : `${signed(thisMove - avgSeason)}pp beyond the usual seasonal move` },
   ];
 
   return {
     id: "stock-not-flow",
     kind: "watch",
     confidence: "High",
-    title: `Card defaults at a record ${f(cur.value)}% — but NEW defaults aren't rising`,
-    takeaway: `The scary headline — a record ${f(cur.value)}% of card loans gone bad — describes OLD loans still sitting on banks' books. The share of loans just starting to miss payments is ${f(curE.value)}%, identical to a year ago and unremarkable by its own history.`,
-    stat: { value: `${signed(curE.value - yAgo, 1)}pp`, label: "change vs a year ago in NEW card defaults — the number that describes today's borrowers" },
-    detail: `Think of a bathtub: the headline default rate is the water level; new defaults are the tap. The level is at a record, but the tap is flowing no faster than last year. That means the record comes from old problem loans aging on the books (and banks writing them off slowly) — not from today's borrowers getting into trouble. For judging Nu — whose book is ~64% cards — the tap matters more than the level.`,
+    title: `Card defaults at ${isRecord ? "a record" : "near-record"} ${f(cur.value)}% — but NEW defaults aren't rising`,
+    takeaway: `The scary headline — ${isRecord ? "a record" : "a near-record"} ${f(cur.value)}% of card loans gone bad — describes OLD loans still sitting on banks' books. The share of loans just starting to miss payments is ${f(curE.value)}%, ${signed(yoyE)}pp vs a year ago and unremarkable by its own history.`,
+    stat: { value: `${signed(yoyE, 1)}pp`, label: "change vs a year ago in NEW card defaults — the number that describes today's borrowers" },
+    detail: `Think of a bathtub: the headline default rate is the water level; new defaults are the tap. The level is at ${isRecord ? "a record" : "a near-record"}, but the tap is flowing ${Math.abs(yoyE) < 0.25 ? "no faster than" : yoyE > 0 ? "only marginally faster than" : "slower than"} last year. That means the level comes from old problem loans aging on the books (and banks writing them off slowly) — not from today's borrowers getting into trouble. For judging Nu — whose book is ~${f((100 * nuC) / nuBook, 0)}% cards — the tap matters more than the level.`,
     sources: [SHEETS.aq],
-    formula: "compare today's rank-in-history for headline NPL vs early NPL; change vs a year ago; seasonal check = this Q1 jump vs the average Q1 jump",
+    formula: `compare today's rank-in-history for headline NPL vs early NPL; change vs a year ago; seasonal check = this ${qLabel} move vs the average ${qLabel} move`,
     steps,
     caveats: [
       "The sheet doesn't say exactly how many days overdue counts as 'early' — if that definition changed, the comparison would break.",
@@ -266,7 +370,7 @@ function insightPersonalCycle(): Insight {
   const periods = systemNpl.periods;
   const curH = last(systemNpl, "Personal loans");
   const curE = last(systemEarlyNpl, "Personal loans");
-  const trough = at(systemNpl, "Personal loans", "3Q24");
+  const low = trough(systemNpl, "Personal loans");
   const r0 = lagCorr(e, h, 0);
   const r1 = lagCorr(e, h, 1);
   const r2 = lagCorr(e, h, 2);
@@ -276,7 +380,7 @@ function insightPersonalCycle(): Insight {
   for (let i = ev.length - 1; i > 0 && rises < 6; i--) { if (ev[i] > ev[i - 1]) rises++; else break; }
 
   const steps: CalcStep[] = [
-    { label: "Personal-loan defaults, from their low point to now", math: `${f(trough)}% (3Q24) → ${f(curH.value)}% (${curH.period})`, result: `${signed(curH.value - trough)}pp worse in 6 quarters`, source: `${SHEETS.aq} · System NPL · Personal loans` },
+    { label: "Personal-loan defaults, from their low point to now", math: `${f(low.value)}% (${low.period}) → ${f(curH.value)}% (${curH.period})`, result: `${signed(curH.value - low.value)}pp worse in ${periods.indexOf(curH.period) - periods.indexOf(low.period)} quarters`, source: `${SHEETS.aq} · System NPL · Personal loans` },
     { label: "The live gauge: loans just starting to miss payments", math: `last readings: ${e.slice(-5).map((v) => (v === null ? "–" : f(v))).join(" → ")}`, result: `${f(curE.value)}% — still climbing (${rises} rises in a row)`, source: `${SHEETS.aq} · System early NPL` },
     { label: "Test: does the live gauge PREDICT the headline, or move WITH it?", math: `how tightly they move together (0–1 scale), shifting one 0, 1, 2 quarters ahead: ${f(r0.r, 2)}, ${f(r1.r, 2)}, ${f(r2.r, 2)} (${r0.n} quarters)`, result: `tightest with NO shift — they move together in the same quarter` },
     { label: "Put the two together", math: `live gauge still rising + it moves with the headline`, result: "no sign the default cycle has peaked" },
@@ -287,9 +391,9 @@ function insightPersonalCycle(): Insight {
     kind: "risk",
     confidence: "Medium",
     title: "Personal-loan defaults are still climbing — no peak in sight",
-    takeaway: `Defaults on personal loans are up ${signed(curH.value - trough)}pp since 3Q24, to ${f(curH.value)}% — and the live gauge (loans just starting to miss payments) has risen ${rises} quarters running. The data gives no reason to call the top yet.`,
+    takeaway: `Defaults on personal loans are up ${signed(curH.value - low.value)}pp since ${low.period}, to ${f(curH.value)}% — and the live gauge (loans just starting to miss payments) has risen ${rises} quarters running. The data gives no reason to call the top yet.`,
     stat: { value: `${f(curH.value)}%`, label: `of personal loans gone bad — and the early-warning gauge is still rising` },
-    detail: `This matters because personal loans are where Nu is growing fastest (see the '34% of all growth' insight). We also tested the common belief that early defaults predict headline defaults 2–3 quarters in advance: in this data they don't — the two move together in the same quarter (correlation ${f(r0.r, 2)}). So the message is simple: the live gauge hasn't turned down, which means the default cycle most likely hasn't peaked.`,
+    detail: `This matters because personal loans are where Nu is growing fastest (see the unsecured-growth insight). We also tested the common belief that early defaults predict headline defaults 2–3 quarters in advance: in this data they don't — the two move together in the same quarter (correlation ${f(r0.r, 2)}). So the message is simple: the live gauge hasn't turned down, which means the default cycle most likely hasn't peaked.`,
     sources: [SHEETS.aq],
     formula: "correlation between early defaults(quarter t) and headline defaults(quarter t+k), tested at k = 0, 1, 2",
     steps,
@@ -313,14 +417,16 @@ function insightPersonalCycle(): Insight {
 // E. Product-mix NPL exposure — Nu's book is built riskier
 // ---------------------------------------------------------------------------
 function mixNpl(bank: string) {
-  const c = last(loanAbsCreditCard, bank).value;
+  const cc = last(loanAbsCreditCard, bank);
+  const c = cc.value;
   const u = last(loanAbsUnsecured, bank).value;
   const p = last(loanAbsPayroll, bank).value;
+  const nplAt = last(systemNpl, "Credit card loans").period;
   const nplC = last(systemNpl, "Credit card loans").value;
   const nplU = last(systemNpl, "Personal loans").value;
   const nplP = last(systemNpl, "Payroll loans").value;
   const tot = c + u + p;
-  return { c, u, p, tot, w: (c * nplC + u * nplU + p * nplP) / tot, nplC, nplU, nplP };
+  return { c, u, p, tot, w: (c * nplC + u * nplU + p * nplP) / tot, nplC, nplU, nplP, booksAt: cc.period, nplAt };
 }
 
 function insightMixRisk(): Insight {
@@ -331,8 +437,8 @@ function insightMixRisk(): Insight {
   const gap = nu.w - it.w;
 
   const steps: CalcStep[] = [
-    { label: "What Nu's loan book is made of (4Q25, R$ mn)", math: `cards ${mn(nu.c)} (${f((100 * nu.c) / nu.tot, 0)}%) · personal ${mn(nu.u)} (${f((100 * nu.u) / nu.tot, 0)}%) · payroll ${mn(nu.p)} (${f((100 * nu.p) / nu.tot, 0)}%)`, result: `${f((100 * (nu.c + nu.u)) / nu.tot, 0)}% of the book has no collateral behind it`, source: `${SHEETS.loans} · Nu rows, 4Q25` },
-    { label: "Brazil-wide default rate of each product (1Q26)", math: `cards ${f(nu.nplC)}% · personal ${f(nu.nplU)}% · payroll ${f(nu.nplP)}%`, result: "the 'risk price' of each product, same for every bank", source: `${SHEETS.aq} · System NPL` },
+    { label: `What Nu's loan book is made of (${nu.booksAt}, R$ mn)`, math: `cards ${mn(nu.c)} (${f((100 * nu.c) / nu.tot, 0)}%) · personal ${mn(nu.u)} (${f((100 * nu.u) / nu.tot, 0)}%) · payroll ${mn(nu.p)} (${f((100 * nu.p) / nu.tot, 0)}%)`, result: `${f((100 * (nu.c + nu.u)) / nu.tot, 0)}% of the book has no collateral behind it`, source: `${SHEETS.loans} · Nu rows, ${nu.booksAt}` },
+    { label: `Brazil-wide default rate of each product (${nu.nplAt})`, math: `cards ${f(nu.nplC)}% · personal ${f(nu.nplU)}% · payroll ${f(nu.nplP)}%`, result: "the 'risk price' of each product, same for every bank", source: `${SHEETS.aq} · System NPL` },
     { label: "Multiply Nu's book by those rates", math: `(${mn(nu.c)}×${f(nu.nplC)} + ${mn(nu.u)}×${f(nu.nplU)} + ${mn(nu.p)}×${f(nu.nplP)}) ÷ ${mn(nu.tot)}`, result: `${f(nu.w, 2)}% — the default rate Nu's MENU alone implies` },
     { label: "Same math for the big banks", math: `Itaú ${f(it.w, 2)}% · Santander ${f(sa.w, 2)}% · Bradesco ${f(br.w, 2)}%`, result: "what THEIR menus imply" },
     { label: "The built-in gap Nu has to out-lend", math: `${f(nu.w, 2)} − ${f(it.w, 2)}`, result: `${signed(gap, 2)}pp vs Itaú (${signed(nu.w - br.w, 2)}pp vs Bradesco)` },
@@ -352,7 +458,7 @@ function insightMixRisk(): Insight {
     caveats: [
       "Uses Brazil-wide default rates for every bank on purpose — that's what isolates the menu from the skill.",
       "Covers the three products in the sheet; the big banks also hold mortgages and vehicle loans (usually safer), so their real full-book advantage is bigger than shown, not smaller.",
-      "Books are 4Q25, default rates are 1Q26 (one quarter apart).",
+      `Books are ${nu.booksAt}, default rates are ${nu.nplAt} — IF.data balances publish on a longer lag than the NPL series.`,
     ],
     evidence: {
       title: "Default rate each bank's product menu implies (identical lending skill assumed)",
@@ -371,40 +477,64 @@ function insightMixRisk(): Insight {
 // F. Nu captured a third of ALL unsecured growth — into a rising-NPL product
 // ---------------------------------------------------------------------------
 function insightUnsecuredCapture(): Insight {
-  const P0 = "4Q24", P1 = "4Q25";
+  // Rolling four-quarter window ending at the newest balance in the workbook.
+  const P1 = last(loanAbsUnsecured, "System").period;
+  const P0 = back(loanAbsUnsecured, "System", 4).period;
   const sys0 = at(loanAbsUnsecured, "System", P0), sys1 = at(loanAbsUnsecured, "System", P1);
   const nu0 = at(loanAbsUnsecured, "Nu", P0), nu1 = at(loanAbsUnsecured, "Nu", P1);
   const dSys = sys1 - sys0, dNu = nu1 - nu0;
   const capture = (100 * dNu) / dSys;
   const share = last(unsecuredShare, "Nu").value;
   const ratio = capture / share;
-  const nplNow = last(systemNpl, "Personal loans").value;
-  const npl3q24 = at(systemNpl, "Personal loans", "3Q24");
+  const nplNow = last(systemNpl, "Personal loans");
+  const low = trough(systemNpl, "Personal loans");
   const banks: [string, number][] = ["Bradesco", "BB", "Itaú", "Caixa", "Inter"].map((b) => [b, at(loanAbsUnsecured, b, P1) - at(loanAbsUnsecured, b, P0)]);
+
+  // The same calculation over the PRIOR year, because a one-year capture ratio
+  // swings hard with the system total — showing both keeps the claim honest.
+  const P00 = back(loanAbsUnsecured, "System", 8).period;
+  const prevCapture =
+    (100 * (at(loanAbsUnsecured, "Nu", P0) - at(loanAbsUnsecured, "Nu", P00))) /
+    (at(loanAbsUnsecured, "System", P0) - at(loanAbsUnsecured, "System", P00));
+
+  // How the eight banks the sheet DOES list compare with the system total. This
+  // has to be measured, not assumed: in some windows the unlisted banks supply
+  // growth, in others they shrink, and the two capture ratios swap places.
+  const LISTED = ["Nu", "Itaú", "Bradesco", "Santander", "Caixa", "BB", "Inter", "XP"];
+  const dListed = LISTED.reduce((sum, b) => {
+    const v0 = ser(loanAbsUnsecured, b)[loanAbsUnsecured.periods.indexOf(P0)];
+    const v1 = ser(loanAbsUnsecured, b)[loanAbsUnsecured.periods.indexOf(P1)];
+    return v0 == null || v1 == null ? sum : sum + (v1 - v0);
+  }, 0);
+  const captureListed = (100 * dNu) / dListed;
+  const dUnlisted = dSys - dListed;
 
   const steps: CalcStep[] = [
     { label: "How much unsecured lending Brazil ADDED in a year", math: `${mn(sys1)} − ${mn(sys0)}`, result: `+${mn(dSys)} (R$ mn)`, source: `${SHEETS.loans} · Total · ${P0}→${P1}` },
     { label: "How much of that came from Nu", math: `${mn(nu1)} − ${mn(nu0)}`, result: `+${mn(dNu)} (Nu's own book grew ${signed(100 * (nu1 / nu0 - 1), 0)}% in the year)`, source: `${SHEETS.loans} · Nu rows` },
     { label: "Nu's slice of ALL the new lending", math: `${mn(dNu)} ÷ ${mn(dSys)}`, result: `${f(capture)}% — more than any other bank` },
     { label: "Compare that with Nu's normal size in this market", math: `${f(capture)} ÷ ${f(share)}`, result: `${f(ratio, 1)}× bigger than its ${f(share)}% market share` },
-    { label: "What was happening to defaults meanwhile", math: `personal-loan defaults ${f(npl3q24)}% (3Q24) → ${f(nplNow)}% (1Q26)`, result: `${signed(nplNow - npl3q24)}pp worse while Nu accelerated`, source: `${SHEETS.aq} · System NPL` },
+    { label: "Compare with the year before that", math: `same math over ${P00}→${P0}`, result: `${f(prevCapture, 0)}% — the ratio swings with how fast the whole market grows`, source: `${SHEETS.loans} · Total row` },
+    { label: "What was happening to defaults meanwhile", math: `personal-loan defaults ${f(low.value)}% (${low.period}) → ${f(nplNow.value)}% (${nplNow.period})`, result: `${signed(nplNow.value - low.value)}pp worse while Nu accelerated`, source: `${SHEETS.aq} · System NPL` },
   ];
 
   return {
     id: "unsecured-capture",
     kind: "risk",
     confidence: "High",
-    title: `One bank, a third of the growth: Nu took ${f(capture, 0)}% of all new unsecured lending`,
-    takeaway: `Of every new real of unsecured (no-collateral) lending Brazil added last year, ${f(capture, 0)} cents came from Nu — ${f(ratio, 1)}× more than its ${f(share, 0)}% market share would suggest. And it happened while that product's default rate climbed from ${f(npl3q24)}% to ${f(nplNow)}%.`,
+    title: `One bank, ${capture >= 45 ? "most" : capture >= 28 ? "a third" : "a fifth"} of the growth: Nu took ${f(capture, 0)}% of all new unsecured lending`,
+    takeaway: `Of every new real of unsecured (no-collateral) lending Brazil added in the year to ${P1}, ${f(capture, 0)} cents came from Nu — ${f(ratio, 1)}× more than its ${f(share, 0)}% market share would suggest. And it happened while that product's default rate climbed from ${f(low.value)}% to ${f(nplNow.value)}%.`,
     stat: { value: `${f(capture, 0)}%`, label: `of Brazil's entire unsecured-lending growth came from Nu — a bank with a ${f(share)}% share` },
-    detail: `Taking growth at ${f(ratio, 1)}× your market share is what winning a market looks like. Doing it while defaults in that exact product rise fastest is what buying risk at the top can look like. Both can be true at once — it depends entirely on how Nu's 2025 borrowers repay. The size of the bet is the insight: a third of the market's new lending now sits on Nu's book.`,
+    detail: `Taking growth at ${f(ratio, 1)}× your market share is what winning a market looks like. Doing it while defaults in that exact product rise fastest is what buying risk at the top can look like. Both can be true at once — it depends entirely on how Nu's 2025 borrowers repay. The size of the bet is the insight: ${f(capture, 0)}% of the market's new lending in that window landed on Nu's book.`,
     sources: [SHEETS.loans, SHEETS.aq],
-    formula: "Nu's slice = Nu's growth ÷ Brazil's growth (4Q24→4Q25);  intensity = that slice ÷ Nu's market share",
+    formula: `Nu's slice = Nu's growth ÷ Brazil's growth (${P0}→${P1});  intensity = that slice ÷ Nu's market share`,
     steps,
     caveats: [
-      "One-year window — this ratio bounces around from year to year.",
-      "Brazil's total includes banks not listed in the sheet (~40% of the growth) — so Nu's slice of the LISTED banks' growth is even bigger.",
-      "The workbook doesn't show Nu's OWN default rate on these loans; the rising rate is the market backdrop, not Nu's realized losses.",
+      `One-year window — this ratio bounces around: the previous year read ${f(prevCapture, 0)}%. It rises whenever the system total grows slowly, not only when Nu grows fast.`,
+      dUnlisted >= 0
+        ? `Brazil's total includes banks the sheet doesn't list; they supplied ${mn(dUnlisted)} of the ${mn(dSys)} growth, so measured against the eight listed banks alone Nu's slice is ${f(captureListed, 0)}%.`
+        : `The eight listed banks grew ${mn(dListed)} between them while the whole system grew only ${mn(dSys)} — the banks the sheet doesn't list SHRANK by ${mn(-dUnlisted)}. Measured against the listed banks alone Nu's slice is ${f(captureListed, 0)}%, lower than the ${f(capture, 0)}% headline.`,
+      "The workbook gives Nu's whole-bank NPL but not its default rate on this product specifically; the rising system rate is the market backdrop, not Nu's realised losses.",
     ],
     evidence: {
       title: `Who supplied Brazil's new unsecured lending (${P0}→${P1}, R$ mn)`,
@@ -420,11 +550,16 @@ function insightUnsecuredCapture(): Insight {
 }
 
 // ---------------------------------------------------------------------------
-// G. Payroll: a 90%-QoQ sprint into the product incumbents are leaving
+// G. Payroll: a fast entry into the product the incumbents are leaving
 // ---------------------------------------------------------------------------
 function insightPayrollEntry(): Insight {
-  const nu3 = at(loanAbsPayroll, "Nu", "3Q25"), nu4 = at(loanAbsPayroll, "Nu", "4Q25");
-  const qoq = 100 * (nu4 / nu3 - 1);
+  // Headline on the YEAR, not the quarter: IF.data restates recent payroll
+  // balances (4Q25 was revised from 6,791 to 4,098 between workbooks), and a
+  // single-quarter growth rate is far more fragile to that than a 4-quarter one.
+  const nuPrev = back(loanAbsPayroll, "Nu", 1), nuNow = last(loanAbsPayroll, "Nu");
+  const nuYAgo = back(loanAbsPayroll, "Nu", 4);
+  const qoq = 100 * (nuNow.value / nuPrev.value - 1);
+  const yoy = 100 * (nuNow.value / nuYAgo.value - 1);
   const sant = ser(loanAbsPayroll, "Santander");
   const peak = Math.max(...sant.filter((v): v is number => v !== null));
   const peakPeriod = loanAbsPayroll.periods[sant.indexOf(peak)];
@@ -436,7 +571,7 @@ function insightPayrollEntry(): Insight {
   const mixCut = cNpl - pNpl;
 
   const steps: CalcStep[] = [
-    { label: "Nu's payroll-loan book, 3Q25 → 4Q25", math: `${mn(nu3)} → ${mn(nu4)} (R$ mn)`, result: `${signed(qoq, 0)}% in one quarter — Nu's fastest-growing product`, source: `${SHEETS.loans} · Nu rows` },
+    { label: `Nu's payroll-loan book over the year to ${nuNow.period}`, math: `${mn(nuYAgo.value)} (${nuYAgo.period}) → ${mn(nuNow.value)} (${nuNow.period}), R$ mn`, result: `${signed(yoy, 0)}% in a year — Nu's fastest-growing product (${signed(qoq, 0)}% in the last quarter alone)`, source: `${SHEETS.loans} · Nu rows` },
     { label: "Meanwhile, the big bank on the other side", math: `Santander's payroll book: peak ${mn(peak)} (${peakPeriod}) → ${mn(santNow)} now`, result: `${f(santDraw)}% below its peak — retreating`, source: `${SHEETS.loans} · Santander` },
     { label: "The product's condition right now", math: `payroll defaults ${f(pNpl)}% vs their all-time high of ${f(pMax)}%`, result: pNpl === pMax ? "Nu is entering at the product's WORST defaults on record" : "near the record", source: `${SHEETS.aq} · System NPL · Payroll` },
     { label: "…and yet payroll is still the safest product around", math: `card defaults ${f(cNpl)}% ÷ payroll defaults ${f(pNpl)}%`, result: `${f(cNpl / pNpl, 1)}× safer than credit cards` },
@@ -448,14 +583,15 @@ function insightPayrollEntry(): Insight {
     kind: "opportunity",
     confidence: "Medium",
     title: `Nu is sprinting into payroll loans just as the big banks walk out`,
-    takeaway: `Nu's payroll-loan book (loans repaid straight out of salaries) jumped ${signed(qoq, 0)}% in one quarter, while Santander's sits ${f(santDraw)}% below its peak. It's Nu's safest product — and growing it directly waters down the riskiness of Nu's overall loan menu.`,
-    stat: { value: `${signed(qoq, 0)}%`, label: "growth in Nu's payroll loans in a single quarter (4Q25) — from a tiny 0.9% share" },
-    detail: `Payroll loans get deducted from paychecks before the borrower can spend the money, which is why they run ${f(cNpl / pNpl, 1)}× fewer defaults than credit cards — even now, at the product's worst-ever ${f(pNpl)}%. The timing is the story: Nu scales in exactly when a big incumbent retreats and the product's defaults peak — a classic contrarian entry. And it connects to the 'loan menu' insight: every 1% of Nu's book that shifts from cards to payroll trims about ${f(mixCut, 1)}bp of built-in risk.`,
+    takeaway: `Nu's payroll-loan book (loans repaid straight out of salaries) grew ${signed(yoy, 0)}% in the year to ${nuNow.period}, while Santander's sits ${f(santDraw)}% below its peak. It's Nu's safest product — and growing it directly waters down the riskiness of Nu's overall loan menu.`,
+    stat: { value: `${signed(yoy, 0)}%`, label: `growth in Nu's payroll loans in the year to ${nuNow.period} — from a ${f(at(payrollShare, "Nu", nuYAgo.period), 2)}% share to ${f(last(payrollShare, "Nu").value, 2)}%` },
+    detail: `Payroll loans get deducted from paychecks before the borrower can spend the money, which is why they run ${f(cNpl / pNpl, 1)}× fewer defaults than credit cards — even now, at ${pNpl >= pMax - 1e-9 ? "the product's worst-ever" : "an elevated"} ${f(pNpl)}%. The timing is the story: Nu scales in exactly when a big incumbent retreats and the product's defaults ${pNpl >= pMax - 1e-9 ? "peak" : "run high"} — a classic contrarian entry. And it connects to the 'loan menu' insight: every 1% of Nu's book that shifts from cards to payroll trims about ${f(mixCut, 1)}bp of built-in risk.`,
     sources: [SHEETS.loans, SHEETS.aq],
-    formula: "quarter growth = Nu(4Q25) ÷ Nu(3Q25) − 1;  Santander pullback = now ÷ peak − 1;  risk effect = card defaults − payroll defaults, per 1% of book shifted",
+    formula: `year growth = Nu(${nuNow.period}) ÷ Nu(${nuYAgo.period}) − 1;  Santander pullback = now ÷ peak − 1;  risk effect = card defaults − payroll defaults, per 1% of book shifted`,
     steps,
     caveats: [
-      `Small-base warning: ${signed(qoq, 0)}% growth is easy off a tiny base — Nu's payroll share is still only ~${f(last(payrollShare, "Nu").value, 1)}%.`,
+      `Small-base warning: ${signed(yoy, 0)}% growth is easy off a tiny base — Nu's payroll share is still only ${f(last(payrollShare, "Nu").value, 2)}% of the market.`,
+      "IF.data restates recent payroll balances between publications — this workbook revised one recent quarter down by roughly 40% — so read the trend, not any single quarter.",
       "Payroll loans earn thin, rate-capped margins — they lower risk but also lower yield.",
       "Record payroll defaults could mean the product itself is deteriorating (rate caps squeezing weaker borrowers), not just a passing cycle.",
     ],
@@ -474,7 +610,9 @@ function insightPayrollEntry(): Insight {
 // H. The Inter mirror — this is a Nu trade, not a "digital banks" trade
 // ---------------------------------------------------------------------------
 function insightInterMirror(): Insight {
-  const P0 = "4Q23", P1 = "4Q25";
+  // Rolling two-year window ending at the newest share reading.
+  const P1 = last(creditCardShare, "Nu").period;
+  const P0 = back(creditCardShare, "Nu", 8).period;
   const nuD = at(creditCardShare, "Nu", P1) - at(creditCardShare, "Nu", P0);
   const inD = at(creditCardShare, "Inter", P1) - at(creditCardShare, "Inter", P0);
   const inNpl = last(peerNpl, "Inter");
@@ -490,7 +628,7 @@ function insightInterMirror(): Insight {
   const itMin = Math.min(...itS.filter((v): v is number => v !== null));
 
   const steps: CalcStep[] = [
-    { label: "Card market share gained over two years (4Q23→4Q25)", math: `Nu ${signed(nuD, 2)}pp vs Inter ${signed(inD, 2)}pp`, result: `Nu gained ${f(nuD / inD, 0)}× more`, source: `${SHEETS.loans} · share columns` },
+    { label: `Card market share gained over two years (${P0}→${P1})`, math: `Nu ${signed(nuD, 2)}pp vs Inter ${signed(inD, 2)}pp`, result: `Nu gained ${f(nuD / inD, 0)}× more`, source: `${SHEETS.loans} · share columns` },
     { label: "How the other digital bank's loans are performing", math: `Inter defaults ${f(inNpl.value)}% vs Itaú ${f(itNpl.value)}%`, result: `${f(spread)}pp worse than the best incumbent`, source: `${SHEETS.aq} · Peer NPL · ${inNpl.period}` },
     { label: "Put that gap in historical context", math: `widest Inter-vs-Itaú gap across all quarters = ${f(maxSpread)}pp, in ${maxAt}`, result: maxAt === inNpl.period ? "the widest ever is RIGHT NOW" : `widest was ${maxAt}` },
     { label: "And the incumbent isn't standing still", math: `Itaú defaults ${f(itNpl.value)}% vs the best it has ever printed (${f(itMin)}%)`, result: itNpl.value === itMin ? "Itaú is at its all-time BEST while Inter worsens" : "near its best" },
@@ -501,15 +639,15 @@ function insightInterMirror(): Insight {
     kind: "structural",
     confidence: "Medium",
     title: "Inter is the proof: 'being digital' isn't the edge — being Nu is",
-    takeaway: `Brazil's other listed digital bank gained just ${signed(inD, 2)}pp of card share in two years while Nu gained ${signed(nuD, 2)}pp — ${f(nuD / inD, 0)}× more. Meanwhile Inter's defaults are the furthest above Itaú's they have ever been.`,
+    takeaway: `Brazil's other listed digital bank gained just ${signed(inD, 2)}pp of card share in two years while Nu gained ${signed(nuD, 2)}pp — ${f(nuD / inD, 0)}× more. Meanwhile Inter's defaults sit ${f(spread)}pp above Itaú's${maxAt === inNpl.period ? " — the furthest they have ever been" : ""}.`,
     stat: { value: `${f(nuD / inD, 0)}×`, label: `Nu gained ${f(nuD / inD, 0)}× more card share than Inter over the same two years` },
     detail: `If a slick app and no branches were all it took, Inter would be compounding like Nu. It isn't: barely any share progress, and loan quality drifting the wrong way while Itaú sits at its best-ever default rate. For a Nu investor this cuts both ways. It confirms Nu's edge is specific to Nu — funding cost, data, execution. But it also removes the comfort of a sector tailwind: Nu has to keep out-executing, because 'digital' by itself demonstrably doesn't win.`,
     sources: [SHEETS.loans, SHEETS.aq],
-    formula: "share gained = share(4Q25) − share(4Q23), per bank;  quality gap = Inter defaults − Itaú defaults, ranked across every quarter",
+    formula: `share gained = share(${P1}) − share(${P0}), per bank;  quality gap = Inter defaults − Itaú defaults, ranked across every quarter`,
     steps,
     caveats: [
-      "Inter runs a different model (heavy in mortgages and secured loans), so it's an imperfect stand-in for Nu.",
-      "Nu's own default rate isn't in the workbook — Inter is the only listed digital-bank comparison the data allows.",
+      "Inter runs a different model (heavy in mortgages and secured loans), so its NPL is not directly comparable with Nu's.",
+      `Share is a two-year window ending ${P1}; a different window changes the multiple.`,
     ],
     evidence: {
       title: "Credit-card market share: Nu vs the other digital bank",
@@ -518,6 +656,129 @@ function insightInterMirror(): Insight {
         { name: "Nu", values: ser(creditCardShare, "Nu") },
         { name: "Inter", values: ser(creditCardShare, "Inter") },
       ]),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// I. Nu's default premium vs incumbents is mostly BOOK MIX, not underwriting
+// ---------------------------------------------------------------------------
+// Newly answerable: the 08.24.2026 workbook publishes Nu's own NPL and a
+// household-segment NPL for the incumbents, so the comparison no longer has to
+// go through Inter as a stand-in.
+function insightHouseholdLikeForLike(): Insight {
+  const INC = [
+    { label: "Itaú", bank: "Itaú", hh: "Itaú" },
+    { label: "Santander", bank: "Santander Brasil", hh: "Santander" },
+    { label: "Bradesco", bank: "Bradesco", hh: "Bradesco" },
+  ];
+  const bankPanel = panel(peerNpl, "Nu", INC.map((i) => i.bank));
+  const hhPanel = panel(householdNpl, "Nu", INC.map((i) => i.hh));
+  const nuBank = last(peerNpl, "Nu");
+  const nuHh = last(householdNpl, "Nu");
+  const bank = INC.map((i) => ({ ...i, v: bankPanel.of(i.bank) }));
+  const hh = INC.map((i) => ({ ...i, v: hhPanel.of(i.hh) }));
+  const bankAvg = bankPanel.mean, hhAvg = hhPanel.mean;
+  const headline = nuBank.value - bankAvg;
+  const likeForLike = nuHh.value - hhAvg;
+  const mixEffect = headline - likeForLike;
+  const mixPct = (100 * mixEffect) / headline;
+  const worstHh = hh.reduce((a, b) => (b.v > a.v ? b : a));
+
+  const steps: CalcStep[] = [
+    { label: "Nu's 90-day default rate, whole bank", math: "read straight off the sheet", result: `${f(nuBank.value)}%`, source: `${SHEETS.aq} · NPL ratio · ${nuBank.period}` },
+    { label: "The three incumbents, whole bank", math: bank.map((b) => `${b.label} ${f(b.v)}%`).join(" · "), result: `average ${f(bankAvg)}% → Nu looks ${signed(headline)}pp worse`, source: `${SHEETS.aq} · NPL ratio · ${nuBank.period}` },
+    { label: "Why that comparison is unfair", math: "Nu lends almost only to households; the incumbents' ratio also contains mortgages and corporate loans, which default far less", result: "different books, not different skill" },
+    { label: "Same three banks, HOUSEHOLD books only", math: hh.map((b) => `${b.label} ${f(b.v)}%`).join(" · "), result: `average ${f(hhAvg)}% → Nu is ${signed(likeForLike)}pp worse`, source: `${SHEETS.hh} · NPL ratio · ${nuHh.period}` },
+    { label: "How much of the headline gap was just book mix", math: `${f(headline)} − ${f(likeForLike)}`, result: `${f(mixEffect)}pp — ${f(mixPct, 0)}% of the apparent gap` },
+    { label: "Cross-check on Nu's side", math: `Nu whole-bank ${f(nuBank.value)}% vs Nu household ${f(nuHh.value)}%`, result: Math.abs(nuBank.value - nuHh.value) < 0.15 ? "identical — Nu has no diluting book, so only the incumbents move" : `${signed(nuHh.value - nuBank.value)}pp` },
+  ];
+
+  return {
+    id: "household-like-for-like",
+    kind: "structural",
+    confidence: "High",
+    title: `Nu's default premium is ${f(likeForLike)}pp, not ${f(headline)}pp — once you compare the same kind of loans`,
+    takeaway: `Headline NPL says Nu (${f(nuBank.value)}%) runs ${signed(headline)}pp above the big three (${f(bankAvg)}% average). Strip the incumbents down to their HOUSEHOLD books — the only part comparable with Nu — and the premium falls to ${signed(likeForLike)}pp. ${f(mixPct, 0)}% of the scary gap was book mix.`,
+    stat: { value: `${f(likeForLike)}pp`, label: `Nu's real default premium over incumbent household books (${nuHh.period})` },
+    detail: `This is the single biggest correction to make when reading Nu's credit numbers. Itaú's ${f(bank[0].v)}% whole-bank ratio is held down by mortgages and corporate lending; on households alone it prints ${f(hh[0].v)}%. Nu has no such ballast, so its group ratio IS its household ratio. What survives the adjustment is a genuine premium — Nu still lends to a riskier household than ${worstHh.label} does — but it is ${f(likeForLike)}pp, and it should be judged against Nu's pricing (see the price-of-risk insight), not against a number built from a different balance sheet.`,
+    sources: [SHEETS.aq, SHEETS.hh],
+    formula: "headline premium = Nu NPL − average incumbent whole-bank NPL;  like-for-like premium = Nu NPL − average incumbent HOUSEHOLD NPL;  mix effect = the difference",
+    steps,
+    caveats: [
+      "Each bank defines its household segment slightly differently; the sheet takes each one's own disclosure.",
+      "Nu's ratio is group-level while the incumbents' are Brazilian operations — Nu's Mexico/Colombia books are inside its number.",
+      "The adjustment shrinks the gap; it does not remove it. Nu still runs the highest household NPL of the four.",
+    ],
+    evidence: {
+      title: "90-day NPL on household books only — Nu vs the big three",
+      type: "line",
+      data: cd(householdNpl.periods, [
+        { name: "Nu", values: ser(householdNpl, "Nu") },
+        ...INC.map((i) => ({ name: i.hh, values: ser(householdNpl, i.hh) })),
+      ]),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// J. Price of risk — Nu's loss premium is a fraction of its price premium
+// ---------------------------------------------------------------------------
+// NOTE ON WHAT THIS DOES NOT CLAIM: the rate is the APR on newly issued
+// non-payroll personal loans, while cost of risk is measured across each bank's
+// WHOLE book. The two are both annual percentages, but of different portfolios,
+// so they are reported side by side and deliberately never divided into a
+// "cover ratio" — that number would describe an asset neither bank holds.
+function insightPriceOfRisk(): Insight {
+  const ratePanel = panel(personalLoanRate, "Nu", ["Itaú", "Bradesco", "Santander", "Caixa"]);
+  const corPanel = panel(costOfRisk, "Nu", ["Itaú", "Santander Brasil", "Bradesco"]);
+  const nuRate = last(personalLoanRate, "Nu");
+  const itRate = { value: ratePanel.of("Itaú"), period: ratePanel.period };
+  const others = ratePanel.rows.map((r) => ({ b: r.name, v: r.value }));
+  const rateAvg = ratePanel.mean;
+  const nuCor = last(costOfRisk, "Nu");
+  const itCor = { value: corPanel.of("Itaú"), period: corPanel.period };
+  const corOthers = corPanel.rows.map((r) => ({ b: r.name, v: r.value }));
+  const corAvg = corPanel.mean;
+  const priceGap = nuRate.value - itRate.value;
+  const lossGap = nuCor.value - itCor.value;
+  const first = { period: personalLoanRate.periods[0], nu: ser(personalLoanRate, "Nu")[0], it: ser(personalLoanRate, "Itaú")[0] };
+  const widened = priceGap - ((first.nu ?? 0) - (first.it ?? 0));
+
+  const steps: CalcStep[] = [
+    { label: "What Nu charges for a personal loan", math: "BCB weekly rate, averaged over the quarter", result: `${f(nuRate.value)}% a.a.`, source: `${SHEETS.rates} · ${nuRate.period}` },
+    { label: "What the big four charge for the same product", math: others.map((o) => `${o.b} ${f(o.v)}%`).join(" · "), result: `average ${f(rateAvg)}% a.a. → Nu prices ${signed(nuRate.value - rateAvg)}pp above them`, source: `${SHEETS.rates} · ${ratePanel.period}${ratePanel.missing.length ? ` (no ${ratePanel.missing.join(", ")} reading this quarter)` : ""}` },
+    { label: "What Nu's credit losses cost it, per year", math: "cost of risk = annualised provisions ÷ loans", result: `${f(nuCor.value)}% a.a.`, source: `${SHEETS.aq} · Cost of risk · ${nuCor.period}` },
+    { label: "…and what they cost the incumbents", math: corOthers.map((o) => `${o.b === "Santander Brasil" ? "Santander" : o.b} ${f(o.v)}%`).join(" · "), result: `average ${f(corAvg)}% a.a.`, source: `${SHEETS.aq} · Cost of risk · ${corPanel.period}${corPanel.missing.length ? ` (no ${corPanel.missing.join(", ")} reading this quarter)` : ""}` },
+    { label: "The two premiums over Itaú, side by side", math: `price ${signed(priceGap)}pp a.a. on personal loans  ·  cost of risk ${signed(lossGap)}pp a.a. on the whole book`, result: `the price premium is the larger of the two, by ${f(priceGap - lossGap)}pp` },
+    { label: "Why these are NOT divided into a cover ratio", math: "the rate is one product's APR on new lending; cost of risk spans every product each bank holds", result: "different portfolios — a ratio would describe an asset neither bank has" },
+    { label: "Has the price premium always been there?", math: `${first.period}: Nu ${f(first.nu ?? 0)}% vs Itaú ${f(first.it ?? 0)}% → ${nuRate.period}: Nu ${f(nuRate.value)}% vs Itaú ${f(itRate.value)}%`, result: `${widened >= 0 ? "widened" : "narrowed"} from ${signed((first.nu ?? 0) - (first.it ?? 0))}pp to ${signed(priceGap)}pp` },
+  ];
+
+  return {
+    id: "price-of-risk",
+    kind: "opportunity",
+    confidence: "Medium",
+    title: `Nu prices personal loans ${signed(priceGap)}pp above Itaú, and carries ${signed(lossGap)}pp more cost of risk`,
+    takeaway: `On the one product both report comparably, Nu charges ${f(nuRate.value)}% a.a. against Itaú's ${f(itRate.value)}%. Across their whole books, Nu's credit losses run ${f(nuCor.value)}% a year against Itaú's ${f(itCor.value)}%. The pricing premium is the bigger of the two numbers — the higher default rate is bought, not simply suffered.`,
+    stat: { value: `${signed(priceGap)}pp`, label: `Nu's personal-loan pricing premium over Itaú (${nuRate.period}), against a ${signed(lossGap)}pp cost-of-risk premium` },
+    detail: `Every "Nu's NPL is high" argument is incomplete without the other side of the trade. Nu prices its personal lending far above the incumbents and books far higher credit losses; both are visible here, and the pricing gap is the larger. What this cannot tell you is the margin: the rate is one product's APR on new lending while cost of risk covers each bank's entire book, so the two must be read side by side rather than netted. For the actual spread you would need Nu's realised asset yield, which this workbook does not carry. The structural risk is the same either way — what happens if Brazil caps rates, or if losses rise faster than Nu can reprice.`,
+    sources: [SHEETS.rates, SHEETS.aq],
+    formula: "price premium = Nu personal-loan rate − Itaú's;  loss premium = Nu cost of risk − Itaú's;  the two are reported separately, not divided",
+    steps,
+    caveats: [
+      "The rate is the headline APR on new non-payroll personal loans; cost of risk is measured across each bank's whole book. They are the closest comparable pair the workbook offers — but they describe different portfolios, so neither their ratio nor their difference is a margin.",
+      "Nu's realised asset yield is well below its personal-loan APR — credit cards, promotional rates and payroll loans all earn less.",
+      "Funding costs differ; a cheaper deposit base is part of why Nu can price where it does.",
+    ],
+    evidence: {
+      title: "Personal-loan rate (% a.a.) — Nu vs the big four",
+      type: "line",
+      data: cd(personalLoanRate.periods, [
+        { name: "Nu", values: ser(personalLoanRate, "Nu") },
+        ...["Itaú", "Bradesco", "Santander", "Caixa"].map((b) => ({ name: b, values: ser(personalLoanRate, b) })),
+      ]),
+      decimals: 0,
     },
   };
 }
@@ -539,6 +800,8 @@ export const INSIGHTS: Insight[] = [
   insightShrinkingMarketGrab,
   insightUnsecuredCapture,
   insightMixRisk,
+  insightHouseholdLikeForLike,
+  insightPriceOfRisk,
   insightStockNotFlow,
   insightPersonalCycle,
   insightPayrollEntry,
