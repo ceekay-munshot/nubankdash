@@ -9,10 +9,18 @@
 //    the workbook is missing one issuer's volume, that issuer's own share is
 //    null and the denominator is repaired by interpolation, so the issuers that
 //    DID report keep their true share (see scratchpad/parse.py).
-//  - Asset-quality series are the published system / peer NPL ratios (%).
+//  - Asset-quality series are the published system / peer NPL ratios (%),
+//    plus four more per-bank credit-risk views (early NPL, NPL over 15 days,
+//    Stage 3, write-offs) that each answer "whose loans are in trouble?" a
+//    different way - see AQ_BLOCKS in parse.py for what each one measures.
 //  - Rates are the BCB weekly personal-loan (non-payroll, pre-fixed) rate,
 //    % a.a., averaged over each calendar quarter.
 // Nu is the sum of its two Brazilian legal entities across every loan section.
+//
+// Deliberately not wired (see read_rates() in parse.py for why): the sheet's
+// monthly-equivalent restatement of the same rates, and its "~120-lender
+// market average" - which turns out to be an average of just 7 lenders
+// (including one extreme outlier) in every quarter that matters today.
 //
 // De-spiked share cells (mirror the nulled balances in absolutes.ts, since
 // share = balance / system total): unsecuredShare - Itau - 3Q23, and
@@ -149,6 +157,50 @@ export const costOfRisk: ChartData = {
     { name: "Santander Brasil", values: [3.8, 4.1, 4.6, 4.3, 3.5, 3.7, 3.7, 4.0, 3.8, 3.6, 3.6, 4.0, 3.7, 3.9, 3.9, 3.5, 3.7, 6.9, 3.0, 2.9, 3.0, 3.1, 3.3, 3.2, 4.0, 5.0, 5.2, 6.0, 5.5, 4.8, 4.5, 5.4, 4.6, 4.4, 4.4, 4.4, 4.1, 4.0, 3.8, 3.5, 3.6, 4.3] },
     { name: "Bradesco", values: [6.0, 5.8, 6.2, 6.4, 5.5, 5.7, 5.0, 5.9, 4.2, 3.7, 3.6, 3.8, 3.5, 3.3, 3.1, 3.6, 5.8, 7.4, 4.6, 3.7, 3.0, 2.6, 2.4, 2.9, 3.1, 3.4, 4.6, 9.1, 5.9, 6.5, 5.9, 6.7, 4.9, 4.5, 4.2, 4.2, 4.2, 4.4, 4.5, 4.5, 4.8, 4.9] },
     { name: "Inter", values: [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 3.6, 5.2, 3.6, 4.1, 6.3, 4.5, 4.4, 4.0, 5.1, 5.6, 5.5, 4.8, 4.9, 4.7, 4.9, 4.8, 4.6, 5.0, 5.4, 5.3, 5.6, 5.9] },
+  ],
+};
+
+export const peerEarlyNpl: ChartData = {
+  periods: ["1Q16", "2Q16", "3Q16", "4Q16", "1Q17", "2Q17", "3Q17", "4Q17", "1Q18", "2Q18", "3Q18", "4Q18", "1Q19", "2Q19", "3Q19", "4Q19", "1Q20", "2Q20", "3Q20", "4Q20", "1Q21", "2Q21", "3Q21", "4Q21", "1Q22", "2Q22", "3Q22", "4Q22", "1Q23", "2Q23", "3Q23", "4Q23", "1Q24", "2Q24", "3Q24", "4Q24", "1Q25", "2Q25", "3Q25", "4Q25", "1Q26", "2Q26"],
+  series: [
+    { name: "Ita\u00fa", values: [3.3, 3.2, 2.9, 2.5, 3.2, 2.8, 2.8, 2.7, 2.7, 2.7, 2.6, 2.3, 2.5, 2.5, 2.3, 2.3, 2.6, 1.7, 1.9, 1.8, 2.0, 2.5, 1.7, 1.8, 2.1, 2.1, 2.3, 2.2, 2.5, 2.5, 2.3, 2.3, 2.4, 2.3, 2.2, 2.0, 1.8, 1.7, 2.0, 1.6, 1.7, 1.7] },
+    { name: "Santander Brasil", values: [4.8, 5.5, 5.0, 4.3, 5.5, 4.8, 4.5, 4.2, 4.3, 4.2, 4.0, 4.2, 4.1, 4.2, 4.1, 3.9, 4.1, 2.7, 3.1, 2.8, 3.6, 3.3, 3.4, 3.5, 4.2, 4.2, 4.3, 4.5, 4.5, 4.2, 4.0, 3.8, 3.8, 3.5, 3.6, 3.7, 3.3, 3.3, 3.1, 3.3, 3.4, 3.3] },
+    { name: "Bradesco", values: [4.8, 5.2, 4.6, 4.7, 4.3, 4.2, 4.3, 4.0, 4.2, 3.9, 3.5, 3.5, 3.8, 3.9, 3.5, 3.6, 4.2, 2.4, 2.3, 2.8, 3.2, 2.6, 2.7, 2.8, 3.6, 3.6, 3.6, 4.1, 4.6, 4.4, 4.1, 4.1, 4.1, 3.7, 3.4, 3.4, 3.4, 3.5, 3.4, 3.5, 3.7, 4.0] },
+    { name: "Inter", values: [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 5.8, 4.9, 4.3, 4.3, 4.5, 4.5, 4.3, 4.1, 4.3, 4.2, 4.3, 4.0, 4.4, 3.9, 3.6, 3.4, 3.8, 3.7, 3.8, 3.7, 4.2, 4.5] },
+    { name: "Nu", values: [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 3.7, 3.7, 4.2, 3.7, 4.7, 4.5, 4.4, 4.2, 5.1, 4.7, 4.5, 4.2, 4.8, 4.5, 4.3, 4.1, 5.0, 4.8] },
+  ],
+};
+
+export const peerNpl15d: ChartData = {
+  periods: ["1Q16", "2Q16", "3Q16", "4Q16", "1Q17", "2Q17", "3Q17", "4Q17", "1Q18", "2Q18", "3Q18", "4Q18", "1Q19", "2Q19", "3Q19", "4Q19", "1Q20", "2Q20", "3Q20", "4Q20", "1Q21", "2Q21", "3Q21", "4Q21", "1Q22", "2Q22", "3Q22", "4Q22", "1Q23", "2Q23", "3Q23", "4Q23", "1Q24", "2Q24", "3Q24", "4Q24", "1Q25", "2Q25", "3Q25", "4Q25", "1Q26", "2Q26"],
+  series: [
+    { name: "Ita\u00fa", values: [3.5, 3.6, 3.9, 3.4, 3.4, 3.2, 3.2, 12.0, 11.9, 10.7, 10.4, 10.3, 10.2, 9.9, 10.0, 10.1, 10.3, 10.6, 10.8, 10.8, 10.2, 9.6, 9.1, 8.6, 8.6, 8.6, 8.9, 9.5, 9.7, 10.0, 10.1, 9.4, 9.2, 9.0, 8.4, 6.8, 6.3, 6.2, 6.1, 5.8, 5.9, 6.0] },
+    { name: "Santander Brasil", values: [9.2, 9.3, 9.6, 9.3, 8.3, 8.3, 8.2, 8.5, 8.2, 8.1, 8.2, 8.3, 8.3, 8.3, 8.4, 8.2, 7.9, 7.5, 6.7, 6.6, 6.6, 6.8, 7.1, 7.5, 8.6, 9.2, 9.6, 10.6, 10.5, 10.3, 9.7, 9.6, 9.2, 9.1, 9.5, 9.3, 9.1, 9.1, 9.3, 9.8, 10.6, 11.4] },
+    { name: "Bradesco", values: [4.2, 4.6, 5.4, 5.5, 5.6, 4.9, 4.8, 4.7, 4.4, 3.9, 3.6, 11.3, 3.3, 3.2, 3.6, 9.7, 3.7, 3.0, 2.3, 11.6, 2.5, 2.5, 2.6, 10.7, 10.7, 11.4, 12.1, 13.6, 15.7, 17.4, 17.8, 15.6, 14.7, 13.8, 13.0, 12.3, 12.0, 11.9, 11.6, 11.3, 11.1, 11.5] },
+    { name: "Inter", values: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.8, 3.0, 3.0, 6.8, 3.4, 3.8, 3.8, 8.5, 4.4, 4.7, 4.7, 9.4, 9.9, 9.7, 9.9, 9.9, 9.9, 10.0, 10.1, 10.5, 11.5, 12.3] },
+    { name: "Nu", values: [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 8.1, 8.7, 10.1, 11.1, 11.4, 12.4, 12.7, 12.7, 13.2, 14.9, 15.3, 14.5, 14.3, 14.6, 14.8, 14.5, 14.4, 15.7] },
+  ],
+};
+
+export const peerStage3: ChartData = {
+  periods: ["1Q16", "2Q16", "3Q16", "4Q16", "1Q17", "2Q17", "3Q17", "4Q17", "1Q18", "2Q18", "3Q18", "4Q18", "1Q19", "2Q19", "3Q19", "4Q19", "1Q20", "2Q20", "3Q20", "4Q20", "1Q21", "2Q21", "3Q21", "4Q21", "1Q22", "2Q22", "3Q22", "4Q22", "1Q23", "2Q23", "3Q23", "4Q23", "1Q24", "2Q24", "3Q24", "4Q24", "1Q25", "2Q25", "3Q25", "4Q25", "1Q26", "2Q26"],
+  series: [
+    { name: "Ita\u00fa", values: [null, null, null, null, null, null, null, 8.9, 8.8, 7.9, 7.5, 7.4, 7.1, 7.0, 7.1, 7.2, 7.2, 7.9, 8.6, 8.5, 7.8, 7.3, 6.5, 6.1, 5.9, 5.9, 6.0, 6.5, 6.7, 7.0, 7.1, 6.6, 6.5, 6.3, 5.8, 4.4, 4.4, 4.3, 4.2, 3.9, 4.0, 4.1] },
+    { name: "Santander Brasil", values: [5.9, 6.1, 6.1, 5.9, 5.4, 5.4, 5.3, 5.3, 5.3, 5.3, 5.3, 5.2, 5.3, 5.3, 5.3, 5.3, 4.9, 5.1, 4.6, 4.6, 4.4, 4.5, 4.7, 4.9, 5.7, 6.3, 6.6, 7.6, 7.3, 7.0, 6.7, 6.6, 6.1, 6.0, 6.3, 6.1, 6.3, 6.5, 6.5, 6.8, 7.2, 8.1] },
+    { name: "Bradesco", values: [null, null, null, null, null, null, null, null, null, null, null, 7.8, null, null, null, 6.4, null, null, null, 9.4, null, null, null, 7.9, 7.5, 7.9, 8.2, 9.3, 10.6, 11.5, 11.7, 10.4, 9.7, 9.4, 8.8, 8.3, 7.9, 7.8, 7.5, 7.2, 6.9, 7.2] },
+    { name: "Inter", values: [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 3.8, null, null, null, 4.4, null, null, null, 4.8, 5.1, 5.1, 5.4, 5.7, 5.9, 5.8, 5.8, 6.2, 6.8, 7.2] },
+    { name: "Nu", values: [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 4.6, 4.6, 5.4, 6.0, 6.1, 6.6, 6.8, 6.7, 7.1, 8.1, 8.3, 7.8, 7.9, 8.1, 8.1, 7.9, 7.9, 8.8] },
+  ],
+};
+
+export const peerWriteOffs: ChartData = {
+  periods: ["1Q16", "2Q16", "3Q16", "4Q16", "1Q17", "2Q17", "3Q17", "4Q17", "1Q18", "2Q18", "3Q18", "4Q18", "1Q19", "2Q19", "3Q19", "4Q19", "1Q20", "2Q20", "3Q20", "4Q20", "1Q21", "2Q21", "3Q21", "4Q21", "1Q22", "2Q22", "3Q22", "4Q22", "1Q23", "2Q23", "3Q23", "4Q23", "1Q24", "2Q24", "3Q24", "4Q24", "1Q25", "2Q25", "3Q25", "4Q25", "1Q26", "2Q26"],
+  series: [
+    { name: "Ita\u00fa", values: [0.9, 0.9, 0.9, 1.3, 0.9, 0.9, 0.8, 0.7, 0.8, 0.7, 0.7, 0.6, 0.6, 0.8, 0.7, 0.6, 0.6, 0.7, 0.6, 0.5, 0.6, 0.5, 0.4, 0.4, 0.5, 0.5, 0.5, 0.5, 0.8, 0.8, 0.8, 0.9, 0.9, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.5, 0.7, 0.8] },
+    { name: "Santander Brasil", values: [1.2, 1.2, 1.2, 1.1, 1.7, 1.1, 1.1, 1.0, 1.1, 1.0, 1.0, 0.9, 1.0, 1.1, 1.1, 0.9, 0.9, 0.8, 0.9, 0.7, 0.6, 0.8, 0.7, 0.8, 0.8, 0.9, 0.8, 1.2, 1.4, 1.5, 1.4, 1.2, 1.2, 1.1, 1.1, 1.0, 0.9, 1.2, 0.7, 0.6, 0.8, 1.0] },
+    { name: "Bradesco", values: [1.4, 1.3, 1.6, 1.7, 1.8, 2.2, 1.6, 1.5, 1.4, 1.3, 1.2, 1.1, 1.0, 1.0, 0.8, 1.0, 0.9, 1.2, 0.8, 0.7, 0.8, 0.7, 0.6, 0.6, 0.8, 0.8, 0.7, 0.7, 1.1, 1.5, 1.6, 2.2, 1.7, 1.8, 1.2, 1.2, 1.2, 1.1, 1.2, 1.0, 1.2, 1.1] },
+    { name: "Inter", values: [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 1.0, 1.1, 1.3, 1.0, 1.0, 1.1, 1.0, 0.9, 1.0, 1.2] },
+    { name: "Nu", values: [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 0.8, 2.0, 1.9, 2.0, 2.1, 2.0, 2.0, 2.2, 2.3, 2.4, 2.7, 2.6, 2.9, 3.0, 2.7, 2.7, 2.9, 3.2] },
   ],
 };
 

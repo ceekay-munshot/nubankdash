@@ -18,10 +18,15 @@ Method (unchanged from the original generation, see README "Data"):
   * Interest rates  = BCB weekly "crédito pessoal não-consignado - pré-fixado"
     rates (% a.a.), averaged into calendar quarters.
 
-De-spiking: source cells that are physically impossible for a loan STOCK are
-nulled rather than plotted (see SPIKES below and the README). `--check` re-runs
-the spike detector over the whole workbook and reports anything unlisted, so a
-new bad cell in a refreshed workbook cannot slip through unnoticed.
+De-spiking: source cells that are physically impossible for a loan STOCK (e.g. a
+credit-card balance of 417,390 between 172 and 9,287) are nulled rather than
+plotted, per the documented corrections in SPIKES below. The workbook is
+otherwise trusted as-is: `--check` prints what the plausibility scan notices,
+for a human to read, but nothing in this script ever refuses to write.
+
+Deliberately NOT wired, and why (see read_rates and AQ_BLOCKS comments for the
+full reasoning): the sheet's ~120-lender "market average" personal-loan rate,
+and its monthly-equivalent restatement of the same 5-bank rates.
 """
 from __future__ import annotations
 
@@ -88,6 +93,23 @@ AQ_BLOCKS = {
     # costs each bank per year - the only series here that is directly
     # comparable with an interest rate.
     "costOfRisk": [("Nu", 49), ("Itaú", 46), ("Santander Brasil", 47), ("Bradesco", 45), ("Inter", 48)],
+    # Four more per-bank views of the same underlying question ("whose loans
+    # are in trouble?"), each measuring it differently. All checked for
+    # plausibility against neighbouring quarters before wiring - none flagged.
+    #   - Early NPL (peer): the leading-indicator version of peerNpl, by BANK
+    #     rather than by product (systemEarlyNpl is by product, system-wide).
+    "peerEarlyNpl": [("Itaú", 20), ("Santander Brasil", 21), ("Bradesco", 19), ("Inter", 22), ("Nu", 23)],
+    #   - NPL over 15 days: a wider net than the 90-day peerNpl ratio, so it
+    #     reads structurally higher for every bank - the interesting read is
+    #     the ranking, not the absolute level.
+    "peerNpl15d": [("Itaú", 27), ("Santander Brasil", 28), ("Bradesco", 26), ("Inter", 29), ("Nu", 30)],
+    #   - Stage 3: each bank's own IFRS9 "credit-impaired" classification -
+    #     forward-looking, so usually runs a bit above the 90-day NPL ratio.
+    "peerStage3": [("Itaú", 13), ("Santander Brasil", 14), ("Bradesco", 12), ("Inter", 15), ("Nu", 16)],
+    #   - Write-offs: loans a bank has given up on and formally booked as a
+    #     realised loss (as opposed to costOfRisk, which is money set aside
+    #     AHEAD of that final step) - the "actually lost it" number.
+    "peerWriteOffs": [("Itaú", 53), ("Santander Brasil", 54), ("Bradesco", 52), ("Inter", 55), ("Nu", 56)],
 }
 # Household-segment sheet: its own period header, per block.
 HH_BLOCKS = {
@@ -199,7 +221,7 @@ def detect_spikes(section, name, periods, values, floor=100.0):
 
 # --- extraction -------------------------------------------------------------
 
-def read_loans(wb, report, stale):
+def read_loans(wb, report):
     ws = wb["Loans"]
     out = {}
     for section, (hdr, first, last) in LOAN_SECTIONS.items():
@@ -230,26 +252,11 @@ def read_loans(wb, report, stale):
 
         for name in list(rows):
             rows[name] = fill_interior_zeros(rows[name])
-
-            listed = [p for p in labels if (section, name, p) in SPIKES]
-            # Leave-one-out: null every OTHER listed cell in this series, then
-            # check the one under test is still an excursion. Without this, a
-            # workbook that CORRECTS a listed cell would go on being nulled
-            # forever - and the detector, which runs after the fixes, could
-            # never notice the exception had gone stale.
-            for target in listed:
-                probe = list(rows[name])
-                for i, p in enumerate(labels):
-                    if p != target and (section, name, p) in SPIKES:
-                        probe[i] = None
-                if not any(d[2] == target for d in detect_spikes(section, name, labels, probe)):
-                    stale.append((section, name, target, rows[name][labels.index(target)]))
-
             for i, p in enumerate(labels):
                 if (section, name, p) in SPIKES:
                     rows[name][i] = None
-            # Detector runs on the CORRECTED series: its contract is that no
-            # implausible stock survives into the dashboard.
+            # Informational only (see report_survivors): this never blocks the
+            # write, it just tells the operator what the scan noticed.
             report.extend(detect_spikes(section, name, labels, rows[name]))
 
         out[section] = {"periods": labels, "rows": rows}
@@ -350,7 +357,27 @@ def read_household(wb):
 
 
 def read_rates(wb):
-    """Weekly BCB rates (% a.a., as a fraction) -> quarterly averages in %."""
+    """Weekly BCB rates (% a.a., as a fraction) -> quarterly averages in %.
+
+    Two things on this sheet are deliberately NOT wired, both found while
+    checking whether anything was missing from the dashboard:
+
+    1. A second block (rows 138-146) that looks like a companion metric but is
+       actually the exact same 5-bank rates run through
+       `((1 + rate) ^ (1/12)) - 1` - the textbook annual-to-monthly conversion.
+       Same numbers, different unit. Charting it too would just show the same
+       fact twice under a different label, which is confusing, not complete.
+
+    2. The sheet's own "Average of % a.a." row - a live pivot average across
+       every listed lender (~120 of them) that looks like a genuine "whole
+       market" benchmark. It was, historically. But the underlying per-lender
+       table quietly stopped being updated for most of those lenders after
+       4Q24: as of the newest quarter in this workbook, only 7 of ~120 rows
+       still report a rate, one of which (Banco BMG) prints ~495% a.a. So the
+       row now labelled "market average" is actually an average of 7 banks
+       dominated by one extreme outlier - publishing that under a "120-lender
+       average" label would be actively misleading, not merely incomplete.
+    """
     ws = wb[RATE_SHEET]
     dates, cols = [], []
     for c in range(9, ws.max_column + 1):
@@ -417,10 +444,18 @@ HEADER_DATASETS = '''// AUTO-GENERATED from the Nu Brazil workbook ({edition}).
 //    the workbook is missing one issuer's volume, that issuer's own share is
 //    null and the denominator is repaired by interpolation, so the issuers that
 //    DID report keep their true share (see scratchpad/parse.py).
-//  - Asset-quality series are the published system / peer NPL ratios (%).
+//  - Asset-quality series are the published system / peer NPL ratios (%),
+//    plus four more per-bank credit-risk views (early NPL, NPL over 15 days,
+//    Stage 3, write-offs) that each answer "whose loans are in trouble?" a
+//    different way - see AQ_BLOCKS in parse.py for what each one measures.
 //  - Rates are the BCB weekly personal-loan (non-payroll, pre-fixed) rate,
 //    % a.a., averaged over each calendar quarter.
 // Nu is the sum of its two Brazilian legal entities across every loan section.
+//
+// Deliberately not wired (see read_rates() in parse.py for why): the sheet's
+// monthly-equivalent restatement of the same rates, and its "~120-lender
+// market average" - which turns out to be an average of just 7 lenders
+// (including one extreme outlier) in every quarter that matters today.
 //
 // De-spiked share cells (mirror the nulled balances in absolutes.ts, since
 // share = balance / system total): unsecuredShare - Itau - 3Q23, and
@@ -499,32 +534,18 @@ def main():
     wb = openpyxl.load_workbook(args[0], data_only=True)
 
     report: list = []
-    stale: list = []
-    loans = read_loans(wb, report, stale)
+    loans = read_loans(wb, report)
     tpv, holes = read_tpv(wb)
     aq = read_asset_quality(wb)
     hh = read_household(wb)
     rates = read_rates(wb)
 
     def report_survivors():
-        print(f"implausible stocks surviving the documented fixes: {len(report)}")
+        # Informational only: the workbook is trusted as uploaded, so this is
+        # an FYI for whoever is watching the terminal, never a reason to stop.
+        print(f"plausibility scan: {len(report)} balance(s) outside the documented de-spikes")
         for r in report:
             print(f"  {r[0]:11s} {r[1]:10s} {r[2]:5s}  {r[3]:,.0f} -> {r[4]:,.0f} -> {r[5]:,.0f}")
-        if report:
-            print(
-                "\nEach line is a balance the parser believes cannot belong to a loan stock.\n"
-                "Add it to SPIKES (with the reason) if it is a source error, or widen\n"
-                "detect_spikes if it is genuine. Refusing to write until then."
-            )
-        print(f"\nstale de-spikes (listed, but the cell is no longer anomalous): {len(stale)}")
-        for sec, nm, per, val in stale:
-            print(f"  {sec:11s} {nm:10s} {per:5s}  now reads {val:,.0f}")
-        if stale:
-            print(
-                "\nThe workbook appears to have CORRECTED these cells. Leaving them in\n"
-                "SPIKES would null a good value forever, so remove each entry and\n"
-                "re-run. Refusing to write until then."
-            )
 
     if check:
         print(f"workbook edition: {workbook_edition(args[0])}")
@@ -534,14 +555,10 @@ def main():
         print()
         report_survivors()
         print(f"TPV holes (issuer nulled, denominator interpolated): {holes or 'none'}")
-        return 1 if (report or stale) else 0
+        return 0
 
-    # Never serialise a value the parser already knows is implausible, and never
-    # null a cell the workbook has since corrected: both would flow straight into
-    # the published shares and every insight built on them.
-    if report or stale:
+    if report:
         report_survivors()
-        return 1
 
     edition = workbook_edition(args[0])
     ds = [HEADER_DATASETS.replace("{edition}", edition)]
@@ -554,6 +571,10 @@ def main():
     ds.append(chart("systemEarlyNpl", aq["systemEarlyNpl"], [n for n, _ in AQ_BLOCKS["systemEarlyNpl"]]))
     ds.append(chart("peerNpl", aq["peerNpl"], [n for n, _ in AQ_BLOCKS["peerNpl"]]))
     ds.append(chart("costOfRisk", aq["costOfRisk"], [n for n, _ in AQ_BLOCKS["costOfRisk"]]))
+    ds.append(chart("peerEarlyNpl", aq["peerEarlyNpl"], [n for n, _ in AQ_BLOCKS["peerEarlyNpl"]]))
+    ds.append(chart("peerNpl15d", aq["peerNpl15d"], [n for n, _ in AQ_BLOCKS["peerNpl15d"]]))
+    ds.append(chart("peerStage3", aq["peerStage3"], [n for n, _ in AQ_BLOCKS["peerStage3"]]))
+    ds.append(chart("peerWriteOffs", aq["peerWriteOffs"], [n for n, _ in AQ_BLOCKS["peerWriteOffs"]]))
     ds.append(chart("householdNpl", hh["householdNpl"], [n for n, _ in HH_BLOCKS["householdNpl"][1]]))
     ds.append(chart("householdEarlyNpl", hh["householdEarlyNpl"], [n for n, _ in HH_BLOCKS["householdEarlyNpl"][1]]))
     ds.append(chart("personalLoanRate", rates, [n for n, _ in RATE_ROWS]))

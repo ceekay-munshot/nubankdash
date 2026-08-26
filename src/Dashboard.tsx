@@ -7,6 +7,7 @@ import { t, font } from "./theme";
 import {
   creditCardShare, tpvShare, unsecuredShare, payrollShare,
   systemNpl, systemEarlyNpl, peerNpl, householdNpl, personalLoanRate, costOfRisk,
+  peerEarlyNpl, peerNpl15d, peerStage3, peerWriteOffs,
   type ChartData,
 } from "./data/datasets";
 import { Header, type DashboardTab } from "./components/Header";
@@ -83,6 +84,12 @@ const rising = (d: ChartData, name: string) => {
 /** Highest reading a series has ever printed. */
 const peak = (d: ChartData, name: string) =>
   Math.max(...(seriesByName(d, name)?.values ?? []).filter((v): v is number => v != null));
+/** Value of `name` at a specific period label, or null if absent. */
+const at = (d: ChartData, name: string, period: string) => {
+  const i = d.periods.indexOf(period);
+  const v = i >= 0 ? seriesByName(d, name)?.values[i] : undefined;
+  return v ?? null;
+};
 
 /**
  * A cross-entity snapshot taken at ONE period: the latest period where `anchor`
@@ -128,7 +135,10 @@ const HH_INCUMBENTS = [
 // Verdicts are fully data-driven: the ranking, the answer, every sign and every
 // trend clause are derived from the datasets so the takeaway can never drift out
 // of sync with the chart when the workbook is regenerated.
-function buildVerdicts(): { npl: Verdict; early: Verdict; peer: Verdict; household: Verdict; rate: Verdict; cor: Verdict } {
+function buildVerdicts(): {
+  npl: Verdict; early: Verdict; peer: Verdict; household: Verdict; rate: Verdict; cor: Verdict;
+  earlyPeer: Verdict; npl15d: Verdict; stage3: Verdict; writeOffs: Verdict;
+} {
   const card = lv(systemNpl, "Credit card loans")!;
   const pers = lv(systemNpl, "Personal loans")!;
   const pay = lv(systemNpl, "Payroll loans")!;
@@ -191,6 +201,41 @@ function buildVerdicts(): { npl: Verdict; early: Verdict; peer: Verdict; househo
   const corAt = corPanel.period;
   const itCor = corIncs.find((r) => r.key === "Itaú")?.v ?? lv(costOfRisk, "Itaú")!;
 
+  // --- Four more bank-by-bank views of "whose loans are in trouble?", each
+  // measuring it a different way. Every panel anchors to Nu's own latest
+  // period so a ranking can never quietly mix quarters.
+  const WITH_INTER = [...INCUMBENTS, { label: "Inter", key: "Inter" }];
+
+  const earlyPeerPanel = panel(peerEarlyNpl, "Nu", WITH_INTER);
+  const nuEarlyPeer = lv(peerEarlyNpl, "Nu")!;
+  const earlyPeerIncs = earlyPeerPanel.rows.filter((r) => r.key !== "Inter");
+  const earlyPeerAvg = earlyPeerIncs.reduce((a, b) => a + b.v, 0) / earlyPeerIncs.length;
+  const earlyPeerWorst = earlyPeerIncs.reduce((a, b) => (b.v > a.v ? b : a));
+  // Does the leading-indicator gap agree with the headline (90-day) gap?
+  const headlineGapWide = nu - worstInc.v > 1;
+  const earlyGapWide = nuEarlyPeer - earlyPeerWorst.v > 1;
+
+  // This one needs Nu INSIDE the ranked list (a rank, not just a comparison),
+  // unlike the panels above — so, unlike WITH_INTER, Nu is included here.
+  const npl15dPanel = panel(peerNpl15d, "Nu", [{ label: "Nu", key: "Nu" }, ...WITH_INTER]);
+  const rank15d = npl15dPanel.ranked.findIndex((r) => r.key === "Nu") + 1;
+
+  const stage3Panel = panel(peerStage3, "Nu", WITH_INTER);
+  const nuStage3 = lv(peerStage3, "Nu")!;
+  const stage3Incs = stage3Panel.rows.filter((r) => r.key !== "Inter");
+  const stage3Avg = stage3Incs.reduce((a, b) => a + b.v, 0) / stage3Incs.length;
+  // Same bank, same quarter: does Nu's own forward-looking flag (Stage 3) run
+  // above or below its own 90-day NPL? (Both series share Nu's latest period
+  // here since peerStage3's panel is also anchored to Nu.)
+  const nuNplSamePeriod = at(peerNpl, "Nu", stage3Panel.period);
+  const stage3AboveNpl = nuNplSamePeriod != null && nuStage3 > nuNplSamePeriod;
+
+  const writeOffsPanel = panel(peerWriteOffs, "Nu", WITH_INTER);
+  const nuWriteOffs = lv(peerWriteOffs, "Nu")!;
+  const writeOffsIncs = writeOffsPanel.rows.filter((r) => r.key !== "Inter");
+  const writeOffsAvg = writeOffsIncs.reduce((a, b) => a + b.v, 0) / writeOffsIncs.length;
+  const writeOffsWorst = writeOffsIncs.reduce((a, b) => (b.v > a.v ? b : a));
+
   return {
     npl: {
       answer: `Card & personal-loan NPLs are at cycle highs; payroll is ${(card / pay).toFixed(1)}× cleaner — but no longer improving.`,
@@ -223,6 +268,28 @@ function buildVerdicts(): { npl: Verdict; early: Verdict; peer: Verdict; househo
       // whole book's provisions), so they are shown side by side and never
       // divided into a cover ratio.
       detail: `Cost of risk (${corAt})${corPanel.note} = annualised provisions ÷ loans. Nu ${fmt(nuCor)} vs an incumbent average of ${fmt(corAvg)} (${corIncs.map((i) => `${i.label} ${fmt(i.v)}`).join(" · ")}). Nu's pricing premium over Itaú on personal loans is the larger of the two figures, but it is measured on one product's new lending while cost of risk spans the whole book — read them together, not as a ratio.`,
+    },
+    earlyPeer: {
+      answer: earlyGapWide === headlineGapWide
+        ? "Same story as the headline number — this isn't a temporary blip."
+        : earlyGapWide
+          ? "This early-warning gauge is already wider than the headline gap — worth watching."
+          : "This early-warning gauge is narrower than the headline gap — Nu's newest loans look relatively better than its overall book.",
+      detail: `Early NPL (${earlyPeerPanel.period})${earlyPeerPanel.note}: Nu ${fmt(nuEarlyPeer)} vs an incumbent average of ${fmt(earlyPeerAvg)} (${earlyPeerIncs.map((i) => `${i.label} ${fmt(i.v)}`).join(" · ")}); Inter ${fmt(earlyPeerPanel.rows.find((r) => r.key === "Inter")?.v ?? NaN)}. This flags trouble sooner than the 90-day ratio above — it's the number to watch first if things are turning.`,
+    },
+    npl15d: {
+      answer: `Nu is #${rank15d} of five once you count everyone overdue by 15+ days, not just 90.`,
+      detail: `NPL over 15 days (${npl15dPanel.period})${npl15dPanel.note}: ${npl15dPanel.ranked.map((r) => `${r.label} ${fmt(r.v)}`).join(" · ")}. This is a wider net than the 90-day NPL chart above, so every bank's number here reads higher — it's the ranking that matters, not the raw level.`,
+    },
+    stage3: {
+      answer: stage3AboveNpl
+        ? `Nu's own risk-classification runs ${signed(nuStage3 - (nuNplSamePeriod ?? nuStage3))}pp above its 90-day NPL — the bank already flags more loans as trouble than the simple overdue-count shows.`
+        : `Nu's own risk-classification (${fmt(nuStage3)}) roughly matches its 90-day NPL (${fmt(nuNplSamePeriod)}).`,
+      detail: `"Stage 3" (${stage3Panel.period})${stage3Panel.note} is each bank's own forward-looking classification of its highest-risk loans, not just a days-overdue count: Nu ${fmt(nuStage3)} vs an incumbent average of ${fmt(stage3Avg)} (${stage3Incs.map((i) => `${i.label} ${fmt(i.v)}`).join(" · ")}).`,
+    },
+    writeOffs: {
+      answer: `Nu formally writes off ${fmt(nuWriteOffs)} of its book a year — ${signed(nuWriteOffs - writeOffsWorst.v)}pp above the highest incumbent, but far below its ${fmt(nuCor)} cost-of-risk provision.`,
+      detail: `Write-offs (${writeOffsPanel.period})${writeOffsPanel.note} are loans a bank has fully given up on and booked as a realised loss — a later, harder step than cost of risk (money set aside AHEAD of that). Nu ${fmt(nuWriteOffs)} vs an incumbent average of ${fmt(writeOffsAvg)} (${writeOffsIncs.map((i) => `${i.label} ${fmt(i.v)}`).join(" · ")}). The gap between what Nu sets aside (${fmt(nuCor)}) and what it has actually written off (${fmt(nuWriteOffs)}) is normal — provisions come first, formal write-offs follow later.`,
     },
   };
 }
@@ -354,6 +421,10 @@ export function Dashboard() {
         nuHouseholdNpl: latest(seriesByName(householdNpl, "Nu")!.values),
         nuPersonalLoanRate: latest(seriesByName(personalLoanRate, "Nu")!.values),
         nuCostOfRisk: latest(seriesByName(costOfRisk, "Nu")!.values),
+        nuEarlyNplPeer: latest(seriesByName(peerEarlyNpl, "Nu")!.values),
+        nuNpl15d: latest(seriesByName(peerNpl15d, "Nu")!.values),
+        nuStage3: latest(seriesByName(peerStage3, "Nu")!.values),
+        nuWriteOffs: latest(seriesByName(peerWriteOffs, "Nu")!.values),
         systemCardNpl: latest(seriesByName(systemNpl, "Credit card loans")!.values),
       },
       insights: INSIGHTS.map((i) => ({
@@ -524,6 +595,57 @@ export function Dashboard() {
             verdict={VERDICTS.household}
             highlight="Nu"
             band={{ of: ["Itaú", "Santander", "Bradesco"], label: "Incumbent range" }}
+            span={2}
+            chartHeight={244}
+          />
+        </div>
+
+        {/* Credit risk, four more ways — same underlying question ("whose loans
+            are in trouble?"), checked with different measures so nothing in
+            the source workbook is left off the dashboard. */}
+        <SectionLabel title="Credit risk — checked four more ways" hint="Same question as above, bank by bank, measured differently" />
+        <div style={{ ...GRID(460), marginTop: 12, marginBottom: 28 }}>
+          <TrendChart
+            data={peerEarlyNpl}
+            title="Whose loans are just starting to fall behind?"
+            subtitle="Early-warning ratio, bank by bank — flags trouble before it's 90 days overdue"
+            category="sector"
+            verdict={VERDICTS.earlyPeer}
+            highlight="Nu"
+            band={{ of: ["Itaú", "Santander Brasil", "Bradesco"], label: "Incumbent range" }}
+            span={2}
+            chartHeight={244}
+          />
+          <TrendChart
+            data={peerNpl15d}
+            title="Loans overdue 15+ days, not just 90"
+            subtitle="A wider net than the headline NPL ratio — everyone's number is naturally higher here"
+            category="sector"
+            verdict={VERDICTS.npl15d}
+            highlight="Nu"
+            band={{ of: ["Itaú", "Santander Brasil", "Bradesco"], label: "Incumbent range" }}
+            span={2}
+            chartHeight={244}
+          />
+          <TrendChart
+            data={peerStage3}
+            title="How each bank classifies its own riskiest loans"
+            subtitle="'Stage 3' — the bank's own forward-looking red flag, not just a days-overdue count"
+            category="sector"
+            verdict={VERDICTS.stage3}
+            highlight="Nu"
+            band={{ of: ["Itaú", "Santander Brasil", "Bradesco"], label: "Incumbent range" }}
+            span={2}
+            chartHeight={244}
+          />
+          <TrendChart
+            data={peerWriteOffs}
+            title="How much of the loan book gets given up on for good"
+            subtitle="Write-offs — the final, realised loss, after provisions (cost of risk, below) are set aside"
+            category="sector"
+            verdict={VERDICTS.writeOffs}
+            highlight="Nu"
+            band={{ of: ["Itaú", "Santander Brasil", "Bradesco"], label: "Incumbent range" }}
             span={2}
             chartHeight={244}
           />
