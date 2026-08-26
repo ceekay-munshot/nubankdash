@@ -1,6 +1,7 @@
-// src/components/charts/NplTrendChart.tsx
+// src/components/charts/TrendChart.tsx
 //
-// Answer-oriented time-series chart for the asset-quality section. The question
+// Answer-oriented time-series chart, used by the asset-quality and pricing
+// sections (any % series over quarters works). The question
 // each card asks (e.g. "is Inter taking worse credit risk than incumbents?") is
 // a change-over-time comparison, so the default view is LINES, not grouped bars:
 // lines let the eye trace one entity across ~40 quarters and read cross-overs at
@@ -35,7 +36,7 @@ const SHORT: Record<string, string> = {
 };
 const shortLabel = (name: string) => SHORT[name] ?? name;
 
-export function NplTrendChart({
+export function TrendChart({
   data,
   title,
   subtitle,
@@ -46,6 +47,7 @@ export function NplTrendChart({
   span = 2,
   chartHeight = 240,
   decimals = 1,
+  yUnit = "%",
 }: {
   data: ChartData;
   title: string;
@@ -60,6 +62,8 @@ export function NplTrendChart({
   span?: 1 | 2 | 3;
   chartHeight?: number;
   decimals?: number;
+  /** Axis/tooltip suffix; "%" for every series on this dashboard. */
+  yUnit?: string;
 }) {
   const [view, setView] = useState<View>("trend");
   const rows = toRows(data);
@@ -100,8 +104,8 @@ export function NplTrendChart({
                 <BarChart data={rows} margin={{ top: 6, right: 16, bottom: 4, left: -6 }} barCategoryGap="18%" barGap={1}>
                   <CartesianGrid stroke={t.gridline} vertical={false} />
                   <XAxis dataKey="period" interval={0} tick={<CategoryTick />} tickLine={false} axisLine={{ stroke: t.borderSolid }} height={22} />
-                  <YAxis width={44} tick={{ fontSize: 10, fill: t.textMuted }} tickLine={false} axisLine={false} domain={[0, "auto"]} tickFormatter={(v: number) => `${v}%`} />
-                  <Tooltip content={<ChartTooltip decimals={decimals} unit="%" />} cursor={{ fill: "rgba(17,24,39,0.05)" }} />
+                  <YAxis width={44} tick={{ fontSize: 10, fill: t.textMuted }} tickLine={false} axisLine={false} domain={[0, "auto"]} tickFormatter={(v: number) => `${v}${yUnit}`} />
+                  <Tooltip content={<ChartTooltip decimals={decimals} unit={yUnit} />} cursor={{ fill: "rgba(17,24,39,0.05)" }} />
                   {data.series.map((s) => (
                     <Bar key={s.name} dataKey={s.name} fill={colorFor(s.name)} radius={[2, 2, 0, 0]} isAnimationActive={false} maxBarSize={14} />
                   ))}
@@ -110,8 +114,8 @@ export function NplTrendChart({
                 <ComposedChart data={rows} margin={{ top: 8, right: rightPad, bottom: 4, left: -6 }}>
                   <CartesianGrid stroke={t.gridline} vertical={false} />
                   <XAxis dataKey="period" interval={0} tick={<CategoryTick />} tickLine={false} axisLine={{ stroke: t.borderSolid }} height={22} />
-                  <YAxis width={44} tick={{ fontSize: 10, fill: t.textMuted }} tickLine={false} axisLine={false} domain={[0, "auto"]} tickFormatter={(v: number) => `${v}%`} />
-                  <Tooltip content={<ChartTooltip decimals={decimals} unit="%" />} cursor={{ stroke: t.textHint, strokeDasharray: "3 3" }} />
+                  <YAxis width={44} tick={{ fontSize: 10, fill: t.textMuted }} tickLine={false} axisLine={false} domain={[0, "auto"]} tickFormatter={(v: number) => `${v}${yUnit}`} />
+                  <Tooltip content={<ChartTooltip decimals={decimals} unit={yUnit} />} cursor={{ stroke: t.textHint, strokeDasharray: "3 3" }} />
                   {band && (
                     <Area
                       dataKey="__band"

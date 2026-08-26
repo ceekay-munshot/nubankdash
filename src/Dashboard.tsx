@@ -6,12 +6,13 @@ import { useHostContext } from "./hooks/useHostContext";
 import { t, font } from "./theme";
 import {
   creditCardShare, tpvShare, unsecuredShare, payrollShare,
-  systemNpl, systemEarlyNpl, peerNpl, type ChartData,
+  systemNpl, systemEarlyNpl, peerNpl, householdNpl, personalLoanRate, costOfRisk,
+  type ChartData,
 } from "./data/datasets";
 import { Header, type DashboardTab } from "./components/Header";
 import { Kpi, type KpiProps } from "./components/Kpi";
 import { ShareLineChart } from "./components/charts/ShareLineChart";
-import { NplTrendChart, type Verdict } from "./components/charts/NplTrendChart";
+import { TrendChart, type Verdict } from "./components/charts/TrendChart";
 import { WatchlistWidget } from "./components/WatchlistWidget";
 import { SourceTrail } from "./components/SourceTrail";
 import { latest } from "./components/charts/common";
@@ -26,17 +27,21 @@ function seriesByName(d: ChartData, name: string) {
   return d.series.find((s) => s.name === name);
 }
 
-/** Latest value and its year-over-year (4-period) change, both nullable. */
-function latestYoY(d: ChartData, name: string): { last: number | null; deltaPP: number | null } {
+/** Latest value, its period label, and its year-over-year (4-period) change. */
+function latestYoY(d: ChartData, name: string): { last: number | null; period: string; deltaPP: number | null } {
   const s = seriesByName(d, name);
-  if (!s) return { last: null, deltaPP: null };
+  if (!s) return { last: null, period: "–", deltaPP: null };
   const vals = s.values;
   let li = -1;
   for (let i = vals.length - 1; i >= 0; i--) if (vals[i] !== null) { li = i; break; }
-  if (li < 0) return { last: null, deltaPP: null };
+  if (li < 0) return { last: null, period: "–", deltaPP: null };
   const last = vals[li]!;
   const prev = li - 4 >= 0 ? vals[li - 4] : null;
-  return { last, deltaPP: prev === null || prev === undefined ? null : Math.round((last - prev) * 10) / 10 };
+  return {
+    last,
+    period: d.periods[li],
+    deltaPP: prev === null || prev === undefined ? null : Math.round((last - prev) * 10) / 10,
+  };
 }
 
 function pp(delta: number | null): { text: string; dir: KpiProps["direction"] } {
@@ -54,65 +59,142 @@ const fmt = (n: number | null) => (n == null ? "–" : `${n.toFixed(1)}%`);
 /** Signed pp delta, e.g. +2.8 / -0.3 — never a hardcoded sign. */
 const signed = (n: number) => `${n >= 0 ? "+" : "-"}${Math.abs(n).toFixed(1)}`;
 const lv = (d: ChartData, name: string) => latest(seriesByName(d, name)?.values ?? []);
-const firstIdx = (d: ChartData, name: string) => {
+/** Period label of a series' latest non-null reading. */
+const lp = (d: ChartData, name: string) => {
   const vals = seriesByName(d, name)?.values ?? [];
-  return vals.findIndex((v) => v != null);
+  for (let i = vals.length - 1; i >= 0; i--) if (vals[i] != null) return d.periods[i];
+  return "–";
 };
-const valAt = (d: ChartData, name: string, idx: number) => {
+/** Value n periods before the latest non-null reading. */
+const lvBack = (d: ChartData, name: string, back: number) => {
   const vals = seriesByName(d, name)?.values ?? [];
-  return idx >= 0 && idx < vals.length ? vals[idx] : null;
+  for (let i = vals.length - 1; i >= 0; i--) {
+    if (vals[i] == null) continue;
+    return i - back >= 0 ? vals[i - back] : null;
+  }
+  return null;
 };
+/** Is the latest reading above the one before it? */
+const rising = (d: ChartData, name: string) => {
+  const prev = lvBack(d, name, 1);
+  const now = lv(d, name);
+  return prev != null && now != null && now > prev;
+};
+/** Highest reading a series has ever printed. */
+const peak = (d: ChartData, name: string) =>
+  Math.max(...(seriesByName(d, name)?.values ?? []).filter((v): v is number => v != null));
+
+/** Latest value of every name, ranked high -> low. */
+const rank = (d: ChartData, names: { label: string; key: string }[]) =>
+  names
+    .map((n) => ({ ...n, v: lv(d, n.key) }))
+    .filter((n): n is { label: string; key: string; v: number } => n.v != null)
+    .sort((a, b) => b.v - a.v);
+
+const INCUMBENTS = [
+  { label: "Itaú", key: "Itaú" },
+  { label: "Santander", key: "Santander Brasil" },
+  { label: "Bradesco", key: "Bradesco" },
+];
+const HH_INCUMBENTS = [
+  { label: "Itaú", key: "Itaú" },
+  { label: "Santander", key: "Santander" },
+  { label: "Bradesco", key: "Bradesco" },
+];
 
 // Verdicts are fully data-driven: the ranking, the answer, every sign and every
 // trend clause are derived from the datasets so the takeaway can never drift out
 // of sync with the chart when the workbook is regenerated.
-function buildVerdicts(): { npl: Verdict; early: Verdict; peer: Verdict } {
+function buildVerdicts(): { npl: Verdict; early: Verdict; peer: Verdict; household: Verdict; rate: Verdict; cor: Verdict } {
   const card = lv(systemNpl, "Credit card loans")!;
   const pers = lv(systemNpl, "Personal loans")!;
   const pay = lv(systemNpl, "Payroll loans")!;
 
   const carde = lv(systemEarlyNpl, "Credit card loans")!;
+  const cardePrev = lvBack(systemEarlyNpl, "Credit card loans", 1);
   const perse = lv(systemEarlyNpl, "Personal loans")!;
   const hhe = lv(systemEarlyNpl, "Household loans")!;
+  const earlyAt = lp(systemEarlyNpl, "Credit card loans");
+  const cardeMove =
+    cardePrev == null
+      ? "is the latest reading"
+      : carde > cardePrev
+        ? `ticked back up in ${earlyAt}`
+        : carde < cardePrev
+          ? `eased in ${earlyAt}`
+          : `was flat in ${earlyAt}`;
 
+  // --- Peer NPL (whole bank). Nu is now in the workbook, so the chart can
+  // finally answer with Nu itself rather than using Inter as a stand-in.
+  const nu = lv(peerNpl, "Nu")!;
   const inter = lv(peerNpl, "Inter")!;
-  const incs = [
-    { name: "Itaú", key: "Itaú" },
-    { name: "Santander", key: "Santander Brasil" },
-    { name: "Bradesco", key: "Bradesco" },
-  ].map((i) => ({ name: i.name, key: i.key, v: lv(peerNpl, i.key)! }));
-  const weakest = incs.reduce((a, b) => (b.v > a.v ? b : a)); // highest-NPL incumbent
-  const best = incs.reduce((a, b) => (b.v < a.v ? b : a)); // lowest-NPL incumbent
-  const interHighest = incs.every((i) => inter > i.v);
+  const incs = INCUMBENTS.map((i) => ({ ...i, v: lv(peerNpl, i.key)! }));
+  const worstInc = incs.reduce((a, b) => (b.v > a.v ? b : a));
+  const bestInc = incs.reduce((a, b) => (b.v < a.v ? b : a));
+  const nuAbove = nu > worstInc.v;
 
-  // Trajectory since Inter entered the peer set.
-  const entry = firstIdx(peerNpl, "Inter");
-  const interDelta = inter - (valAt(peerNpl, "Inter", entry) ?? inter);
-  const incTrends = incs.map((i) => ({ name: i.name, d: i.v - (valAt(peerNpl, i.key, entry) ?? i.v) }));
-  const lead = incTrends.reduce((a, b) => (b.d > a.d ? b : a)); // fastest-rising incumbent
-  const sectorRose = lead.d > 0.1;
+  // --- Household segment: the like-for-like read, because the incumbents'
+  // whole-bank ratio is diluted by mortgages and corporate lending.
+  const nuHh = lv(householdNpl, "Nu")!;
+  const hhIncs = HH_INCUMBENTS.map((i) => ({ ...i, v: lv(householdNpl, i.key)! }));
+  const hhWorst = hhIncs.reduce((a, b) => (b.v > a.v ? b : a));
+  const mean = (xs: { v: number }[]) => xs.reduce((a, b) => a + b.v, 0) / xs.length;
+  const bankAvg = mean(incs);
+  const hhAvg = mean(hhIncs);
+  const headlinePrem = nu - bankAvg;
+  const likeForLike = nuHh - hhAvg;
+  const mixShare = (100 * (headlinePrem - likeForLike)) / headlinePrem;
+  const hhAt = lp(householdNpl, "Nu");
 
-  const peerAnswer = interHighest
-    ? "Yes — Inter now carries the highest NPL of the four."
-    : inter > best.v
-      ? "Partly — Inter runs above best-in-class, but not the whole peer set."
-      : "No — Inter's NPL sits inside the incumbent range.";
-  const peerTrend = sectorRose
-    ? `Inter is up ${signed(interDelta)}pp since it joined the peer set in 2021 — but the sector drifted up too, led by ${lead.name} (${signed(lead.d)}pp).`
-    : `Inter is up ${signed(interDelta)}pp since it joined the peer set in 2021, while incumbents were flat-to-lower.`;
+  // --- Pricing: what each bank charges for the same product.
+  const rateRanked = rank(personalLoanRate, [
+    { label: "Nu", key: "Nu" },
+    ...INCUMBENTS.map((i) => ({ label: i.label, key: i.label })),
+    { label: "Caixa", key: "Caixa" },
+  ]);
+  const nuRate = lv(personalLoanRate, "Nu")!;
+  const itRate = lv(personalLoanRate, "Itaú")!;
+  const rateAt = lp(personalLoanRate, "Nu");
+  const nuRatePos = rateRanked.findIndex((r) => r.key === "Nu") + 1;
+
+  // --- Cost of risk: what those loans actually lose, per year. Same unit as
+  // the rate above, so the two charts read as one trade.
+  const nuCor = lv(costOfRisk, "Nu")!;
+  const corIncs = INCUMBENTS.map((i) => ({ ...i, v: lv(costOfRisk, i.key)! }));
+  const corAvg = corIncs.reduce((a, b) => a + b.v, 0) / corIncs.length;
+  const corAt = lp(costOfRisk, "Nu");
+  const itCor = lv(costOfRisk, "Itaú")!;
+  const cover = (nuRate - itRate) / (nuCor - itCor);
 
   return {
     npl: {
-      answer: "Card & personal-loan NPLs are back near cycle highs; payroll stays structurally clean.",
-      detail: `Credit-card (${fmt(card)}) and personal-loan (${fmt(pers)}) delinquencies have re-accelerated since 2022, while payroll holds at ${fmt(pay)} — a ~${Math.round(card - pay)}pp gap between unsecured stress and secured resilience.`,
+      answer: `Card & personal-loan NPLs are at cycle highs; payroll is ${(card / pay).toFixed(1)}× cleaner — but no longer improving.`,
+      detail: `Credit-card (${fmt(card)}${card >= peak(systemNpl, "Credit card loans") - 1e-9 ? ", a record" : ""}) and personal-loan (${fmt(pers)}${pers >= peak(systemNpl, "Personal loans") - 1e-9 ? ", a record" : ""}) delinquencies have re-accelerated since 2022. Payroll, the secured product, sits at ${fmt(pay)} — still a ~${Math.round(card - pay)}pp gap to unsecured stress, though it is ${rising(systemNpl, "Payroll loans") ? "drifting up too" : "no longer falling"}.`,
     },
     early: {
       answer: "Leading indicator — early arrears run hottest in household & personal loans.",
-      detail: `Household (${fmt(hhe)}) and personal-loan (${fmt(perse)}) early NPLs lead and are still climbing; card early NPL (${fmt(carde)}) ticked back up in 1Q26 — an advance signal that 90-day NPLs may re-accelerate next.`,
+      detail: `Household (${fmt(hhe)}) and personal-loan (${fmt(perse)}) early NPLs lead and are ${rising(systemEarlyNpl, "Personal loans") ? "still climbing" : "off their highs"} — the advance signal for where 90-day NPLs go next; card early NPL (${fmt(carde)}) ${cardeMove}.`,
     },
     peer: {
-      answer: peerAnswer,
-      detail: `At ${fmt(inter)}, Inter is ${signed(inter - weakest.v)}pp vs the weakest incumbent (${weakest.name} ${fmt(weakest.v)}) and ${signed(inter - best.v)}pp vs best-in-class ${best.name} (${fmt(best.v)}). ${peerTrend}`,
+      answer: nuAbove
+        ? `Yes on the headline — Nu's ${fmt(nu)} is above every incumbent. But the books aren't comparable.`
+        : `No — Nu's ${fmt(nu)} sits inside the incumbent range.`,
+      detail: `Nu is ${signed(nu - worstInc.v)}pp vs the weakest incumbent (${worstInc.label} ${fmt(worstInc.v)}) and ${signed(nu - bestInc.v)}pp vs best-in-class ${bestInc.label} (${fmt(bestInc.v)}); Inter, the other digital bank, prints ${fmt(inter)}. The catch: Nu lends almost only to households, while ${bestInc.label}'s ratio is diluted by mortgages and corporate loans. The household-only chart below strips that out.`,
+    },
+    household: {
+      answer: `Like-for-like Nu's premium is ${signed(likeForLike)}pp, not ${signed(headlinePrem)}pp — ${mixShare.toFixed(0)}% of the headline gap was book mix.`,
+      detail: `On household books only (${hhAt}), Nu runs ${fmt(nuHh)} against ${hhIncs.map((i) => `${i.label} ${fmt(i.v)}`).join(" · ")} — an average of ${fmt(hhAvg)}, versus ${fmt(bankAvg)} for the same three banks whole-bank. Nu is still the highest of the four, but by ${signed(nuHh - hhWorst.v)}pp over ${hhWorst.label} rather than the ${signed(nu - worstInc.v)}pp the chart above implies.`,
+    },
+    rate: {
+      answer:
+        nuRatePos === 1
+          ? `Yes — Nu charges the most of the five, ${fmt(nuRate)} a.a. against Itaú's ${fmt(itRate)}.`
+          : `Nu is #${nuRatePos} of five on price, ${fmt(nuRate)} a.a. against Itaú's ${fmt(itRate)}.`,
+      detail: `Latest quarter (${rateAt}), non-payroll personal loans: ${rateRanked.map((r) => `${r.label} ${fmt(r.v)}`).join(" · ")}. Nu prices ${(nuRate / itRate).toFixed(2)}× Itaú — the revenue side of the extra default risk in the charts above.`,
+    },
+    cor: {
+      answer: `Nu loses ${fmt(nuCor)} of its book a year to credit — but charges ${signed(nuRate - itRate)}pp more than Itaú to carry ${signed(nuCor - itCor)}pp more loss.`,
+      detail: `Cost of risk (${corAt}) = annualised provisions ÷ loans, the same unit as the rate chart. Nu ${fmt(nuCor)} vs an incumbent average of ${fmt(corAvg)} (${corIncs.map((i) => `${i.label} ${fmt(i.v)}`).join(" · ")}). Against Itaú specifically, Nu's price premium covers its loss premium ${cover.toFixed(1)}× — the whole high-price/high-loss model in two numbers.`,
     },
   };
 }
@@ -210,12 +292,17 @@ export function Dashboard() {
     const uns = latestYoY(unsecuredShare, "Nu");
     const pay = latestYoY(payrollShare, "Nu");
     const npl = latestYoY(systemNpl, "Credit card loans");
+    const nuNpl = latestYoY(peerNpl, "Nu");
+    // Every scope label carries its OWN latest period — the workbook publishes
+    // loan balances, card volumes and NPLs on different lags, so a single
+    // hardcoded quarter would be wrong for at least one tile.
     return [
-      { label: "Nu · Credit-card share", value: `${cc.last?.toFixed(1)}%`, ...spread(pp(cc.deltaPP)), scope: "4Q25 · % of system", accent: "#820ad1" },
-      { label: "Nu · Card TPV share", value: `${tpv.last?.toFixed(1)}%`, ...spread(pp(tpv.deltaPP)), scope: "1Q26 · #2 issuer", accent: "#820ad1" },
-      { label: "Nu · Unsecured share", value: `${uns.last?.toFixed(1)}%`, ...spread(pp(uns.deltaPP)), scope: "4Q25 · % of system", accent: "#820ad1" },
-      { label: "Nu · Payroll share", value: `${pay.last?.toFixed(1)}%`, ...spread(pp(pay.deltaPP)), scope: "4Q25 · early entry", accent: "#820ad1" },
-      { label: "System · Card NPL", value: `${npl.last?.toFixed(1)}%`, ...spread(pp(npl.deltaPP)), invert: true, scope: "1Q26 · credit cycle", accent: "#2a78d6" },
+      { label: "Nu · Credit-card share", value: `${cc.last?.toFixed(1)}%`, ...spread(pp(cc.deltaPP)), scope: `${cc.period} · % of system`, accent: "#820ad1" },
+      { label: "Nu · Card TPV share", value: `${tpv.last?.toFixed(1)}%`, ...spread(pp(tpv.deltaPP)), scope: `${tpv.period} · #2 issuer`, accent: "#820ad1" },
+      { label: "Nu · Unsecured share", value: `${uns.last?.toFixed(1)}%`, ...spread(pp(uns.deltaPP)), scope: `${uns.period} · % of system`, accent: "#820ad1" },
+      { label: "Nu · Payroll share", value: `${pay.last?.toFixed(2)}%`, ...spread(pp(pay.deltaPP)), scope: `${pay.period} · early entry`, accent: "#820ad1" },
+      { label: "Nu · NPL ratio", value: `${nuNpl.last?.toFixed(1)}%`, ...spread(pp(nuNpl.deltaPP)), invert: true, scope: `${nuNpl.period} · 90-day, whole bank`, accent: "#820ad1" },
+      { label: "System · Card NPL", value: `${npl.last?.toFixed(1)}%`, ...spread(pp(npl.deltaPP)), invert: true, scope: `${npl.period} · credit cycle`, accent: "#2a78d6" },
     ];
   }, []);
 
@@ -235,6 +322,10 @@ export function Dashboard() {
         nuTpvShare: latest(seriesByName(tpvShare, "Nu")!.values),
         nuUnsecuredShare: latest(seriesByName(unsecuredShare, "Nu")!.values),
         nuPayrollShare: latest(seriesByName(payrollShare, "Nu")!.values),
+        nuNpl: latest(seriesByName(peerNpl, "Nu")!.values),
+        nuHouseholdNpl: latest(seriesByName(householdNpl, "Nu")!.values),
+        nuPersonalLoanRate: latest(seriesByName(personalLoanRate, "Nu")!.values),
+        nuCostOfRisk: latest(seriesByName(costOfRisk, "Nu")!.values),
         systemCardNpl: latest(seriesByName(systemNpl, "Credit card loans")!.values),
       },
       insights: INSIGHTS.map((i) => ({
@@ -341,7 +432,7 @@ export function Dashboard() {
           <ShareLineChart
             data={creditCardShare}
             title="Credit-card loans — market share"
-            subtitle="Nu now ~15% of the system, from near-zero in 2018"
+            subtitle="Nu now ~16% of the system, from ~3% in 2019"
             category="markets"
           />
           <ShareLineChart
@@ -353,13 +444,13 @@ export function Dashboard() {
           <ShareLineChart
             data={unsecuredShare}
             title="Unsecured loans — market share"
-            subtitle="Fastest-growing Nu book; ~14% of system"
+            subtitle="Fastest-growing Nu book; ~15% of system"
             category="markets"
           />
           <ShareLineChart
             data={payrollShare}
             title="Payroll loans — market share"
-            subtitle="Nu's newest entry; still under 1% of a bank-dominated market"
+            subtitle="Nu's newest entry; still well under 1% of a bank-dominated market"
             category="markets"
             decimals={1}
           />
@@ -368,7 +459,7 @@ export function Dashboard() {
         {/* Asset quality section */}
         <SectionLabel title="Asset quality" hint="System credit cycle & peer credit risk (NPL %)" />
         <div style={{ ...GRID(460), marginTop: 12, marginBottom: 28 }}>
-          <NplTrendChart
+          <TrendChart
             data={systemNpl}
             title="System NPL by product"
             subtitle="Macro credit cycle — 90-day NPL ratio by loan product"
@@ -377,7 +468,7 @@ export function Dashboard() {
             span={2}
             chartHeight={244}
           />
-          <NplTrendChart
+          <TrendChart
             data={systemEarlyNpl}
             title="System early NPL by product"
             subtitle="Leading indicator — 15-to-90-day arrears by loan product"
@@ -386,13 +477,50 @@ export function Dashboard() {
             span={2}
             chartHeight={244}
           />
-          <NplTrendChart
+          <TrendChart
             data={peerNpl}
-            title="Peer NPL ratio"
-            subtitle="Are digital banks (Inter) taking worse credit risk than incumbents?"
+            title="Peer NPL ratio — whole bank"
+            subtitle="Is Nu taking worse credit risk than the incumbents?"
             category="sector"
             verdict={VERDICTS.peer}
-            highlight="Inter"
+            highlight="Nu"
+            band={{ of: ["Itaú", "Santander Brasil", "Bradesco"], label: "Incumbent range" }}
+            span={2}
+            chartHeight={244}
+          />
+          <TrendChart
+            data={householdNpl}
+            title="Peer NPL ratio — household books only"
+            subtitle="The like-for-like comparison: Nu lends only to households, the incumbents don't"
+            category="sector"
+            verdict={VERDICTS.household}
+            highlight="Nu"
+            band={{ of: ["Itaú", "Santander", "Bradesco"], label: "Incumbent range" }}
+            span={2}
+            chartHeight={244}
+          />
+        </div>
+
+        {/* Pricing section */}
+        <SectionLabel title="Pricing" hint="What each bank charges for the same product (BCB weekly series)" />
+        <div style={{ ...GRID(460), marginTop: 12, marginBottom: 28 }}>
+          <TrendChart
+            data={personalLoanRate}
+            title="Personal-loan interest rate"
+            subtitle="Non-payroll, pre-fixed personal loans — % a.a., quarterly average of the weekly BCB rate"
+            category="sector"
+            verdict={VERDICTS.rate}
+            highlight="Nu"
+            span={2}
+            chartHeight={244}
+          />
+          <TrendChart
+            data={costOfRisk}
+            title="Cost of risk"
+            subtitle="What the lending actually loses — annualised provisions ÷ loans, % a.a. (same unit as the rate above)"
+            category="sector"
+            verdict={VERDICTS.cor}
+            highlight="Nu"
             band={{ of: ["Itaú", "Santander Brasil", "Bradesco"], label: "Incumbent range" }}
             span={2}
             chartHeight={244}
