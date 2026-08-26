@@ -285,9 +285,13 @@ function insightStockNotFlow(): Insight {
   // version hardcoded the January effect and broke the moment the latest
   // reading stopped being a Q1.)
   const qLabel = quarterOf(curE.period);
+  const curIdx = periods.indexOf(curE.period);
   const seasonal: number[] = [];
   periods.forEach((pd, i) => {
-    if (i === 0 || quarterOf(pd) !== qLabel) return;
+    // Skip the quarter under test: including its own move in the baseline pulls
+    // the benchmark toward the observation and can make an unusual move look
+    // ordinary.
+    if (i === 0 || i === curIdx || quarterOf(pd) !== qLabel) return;
     const a = enpl[i - 1], b = enpl[i];
     if (a !== null && b !== null) seasonal.push(b - a);
   });
@@ -303,7 +307,7 @@ function insightStockNotFlow(): Insight {
     { label: "Loans JUST STARTING to miss payments — 'early NPL', the tap filling it", math: `read straight off the sheet`, result: `${f(curE.value)}%`, source: `${SHEETS.aq} · System early NPL · ${curE.period}` },
     { label: "Is the tap flowing faster than a year ago?", math: `${f(curE.value)} (${curE.period}) vs ${f(yAgo.value)} (${yAgo.period})`, result: `${signed(yoyE)}pp — ${Math.abs(yoyE) < 0.25 ? "essentially unchanged" : yoyE > 0 ? "yes, a little" : "no"}` },
     { label: "Is the tap high by its own history?", math: `sort all ${eVals.length} readings; today ranks #${rankE}`, result: `no — mid-pack (its record is ${f(maxE)}%)` },
-    { label: "Remove the seasonal pattern", math: `early NPL typically moves ${signed(avgSeason, 2)}pp into a ${qLabel} quarter (${seasonal.length} years on record); this year ${f(prev.value)} → ${f(curE.value)} = ${signed(thisMove)}pp`, result: Math.abs(thisMove - avgSeason) < 0.25 ? "this quarter's move is the usual seasonal pattern" : `${signed(thisMove - avgSeason)}pp beyond the usual seasonal move` },
+    { label: "Remove the seasonal pattern", math: `early NPL typically moves ${signed(avgSeason, 2)}pp into a ${qLabel} quarter (${seasonal.length} earlier years, this one excluded); this year ${f(prev.value)} → ${f(curE.value)} = ${signed(thisMove)}pp`, result: Math.abs(thisMove - avgSeason) < 0.25 ? "this quarter's move is the usual seasonal pattern" : `${signed(thisMove - avgSeason)}pp beyond the usual seasonal move` },
   ];
 
   return {
@@ -692,8 +696,13 @@ function insightHouseholdLikeForLike(): Insight {
 }
 
 // ---------------------------------------------------------------------------
-// J. Price of risk — Nu charges far more than the extra losses it books
+// J. Price of risk — Nu's loss premium is a fraction of its price premium
 // ---------------------------------------------------------------------------
+// NOTE ON WHAT THIS DOES NOT CLAIM: the rate is the APR on newly issued
+// non-payroll personal loans, while cost of risk is measured across each bank's
+// WHOLE book. The two are both annual percentages, but of different portfolios,
+// so they are reported side by side and deliberately never divided into a
+// "cover ratio" — that number would describe an asset neither bank holds.
 function insightPriceOfRisk(): Insight {
   const nuRate = last(personalLoanRate, "Nu");
   const itRate = last(personalLoanRate, "Itaú");
@@ -705,31 +714,32 @@ function insightPriceOfRisk(): Insight {
   const corAvg = corOthers.reduce((s, x) => s + x.v, 0) / corOthers.length;
   const priceGap = nuRate.value - itRate.value;
   const lossGap = nuCor.value - itCor.value;
-  const cover = priceGap / lossGap;
   const first = { period: personalLoanRate.periods[0], nu: ser(personalLoanRate, "Nu")[0], it: ser(personalLoanRate, "Itaú")[0] };
+  const widened = priceGap - ((first.nu ?? 0) - (first.it ?? 0));
 
   const steps: CalcStep[] = [
     { label: "What Nu charges for a personal loan", math: "BCB weekly rate, averaged over the quarter", result: `${f(nuRate.value)}% a.a.`, source: `${SHEETS.rates} · ${nuRate.period}` },
     { label: "What the big four charge for the same product", math: others.map((o) => `${o.b} ${f(o.v)}%`).join(" · "), result: `average ${f(rateAvg)}% a.a. → Nu prices ${signed(nuRate.value - rateAvg)}pp above them`, source: `${SHEETS.rates} · ${nuRate.period}` },
-    { label: "What Nu's credit losses actually cost, per year", math: "cost of risk = annualised provisions ÷ loans — the same unit as an interest rate", result: `${f(nuCor.value)}% a.a.`, source: `${SHEETS.aq} · Cost of risk · ${nuCor.period}` },
+    { label: "What Nu's credit losses cost it, per year", math: "cost of risk = annualised provisions ÷ loans", result: `${f(nuCor.value)}% a.a.`, source: `${SHEETS.aq} · Cost of risk · ${nuCor.period}` },
     { label: "…and what they cost the incumbents", math: corOthers.map((o) => `${o.b === "Santander Brasil" ? "Santander" : o.b} ${f(o.v)}%`).join(" · "), result: `average ${f(corAvg)}% a.a.`, source: `${SHEETS.aq} · Cost of risk · ${nuCor.period}` },
-    { label: "Put the two gaps side by side (vs Itaú)", math: `price gap ${signed(priceGap)}pp a.a.  vs  loss gap ${signed(lossGap)}pp a.a.`, result: `${f(cover, 1)}× — Nu charges ${f(cover, 1)} reais of extra interest for every extra real of credit loss` },
-    { label: "Has the gap always been there?", math: `${first.period}: Nu ${f(first.nu ?? 0)}% vs Itaú ${f(first.it ?? 0)}% → ${nuRate.period}: Nu ${f(nuRate.value)}% vs Itaú ${f(itRate.value)}%`, result: `the price premium widened from ${signed((first.nu ?? 0) - (first.it ?? 0))}pp to ${signed(priceGap)}pp` },
+    { label: "The two premiums over Itaú, side by side", math: `price ${signed(priceGap)}pp a.a. on personal loans  ·  cost of risk ${signed(lossGap)}pp a.a. on the whole book`, result: `the price premium is the larger of the two, by ${f(priceGap - lossGap)}pp` },
+    { label: "Why these are NOT divided into a cover ratio", math: "the rate is one product's APR on new lending; cost of risk spans every product each bank holds", result: "different portfolios — a ratio would describe an asset neither bank has" },
+    { label: "Has the price premium always been there?", math: `${first.period}: Nu ${f(first.nu ?? 0)}% vs Itaú ${f(first.it ?? 0)}% → ${nuRate.period}: Nu ${f(nuRate.value)}% vs Itaú ${f(itRate.value)}%`, result: `${widened >= 0 ? "widened" : "narrowed"} from ${signed((first.nu ?? 0) - (first.it ?? 0))}pp to ${signed(priceGap)}pp` },
   ];
 
   return {
     id: "price-of-risk",
     kind: "opportunity",
     confidence: "Medium",
-    title: `Nu charges ${f(cover, 1)}× more interest than the extra credit losses it books`,
-    takeaway: `Nu's personal loans price at ${f(nuRate.value)}% a.a. against Itaú's ${f(itRate.value)}% — ${signed(priceGap)}pp more. Nu's credit losses run ${f(nuCor.value)}% of loans a year against Itaú's ${f(itCor.value)}% — only ${signed(lossGap)}pp more. The higher default rate is bought, not suffered.`,
-    stat: { value: `${f(cover, 1)}×`, label: "extra interest charged per unit of extra credit loss, vs Itaú" },
-    detail: `Every "Nu's NPL is high" argument is incomplete without the other side of the trade. Both numbers here are annual percentages of the loan book, so they can be compared directly: Nu prices ${signed(priceGap)}pp above Itaú and books ${signed(lossGap)}pp more loss. That is the whole high-risk/high-price model in two numbers — and it is why Nu can run the highest household NPL of its peer group and still out-earn banks with cleaner books. The risk in the model is not the level of either number, it is what happens to the ratio if Brazil caps rates or if losses rise faster than Nu can reprice.`,
+    title: `Nu prices personal loans ${signed(priceGap)}pp above Itaú, and carries ${signed(lossGap)}pp more cost of risk`,
+    takeaway: `On the one product both report comparably, Nu charges ${f(nuRate.value)}% a.a. against Itaú's ${f(itRate.value)}%. Across their whole books, Nu's credit losses run ${f(nuCor.value)}% a year against Itaú's ${f(itCor.value)}%. The pricing premium is the bigger of the two numbers — the higher default rate is bought, not simply suffered.`,
+    stat: { value: `${signed(priceGap)}pp`, label: `Nu's personal-loan pricing premium over Itaú (${nuRate.period}), against a ${signed(lossGap)}pp cost-of-risk premium` },
+    detail: `Every "Nu's NPL is high" argument is incomplete without the other side of the trade. Nu prices its personal lending far above the incumbents and books far higher credit losses; both are visible here, and the pricing gap is the larger. What this cannot tell you is the margin: the rate is one product's APR on new lending while cost of risk covers each bank's entire book, so the two must be read side by side rather than netted. For the actual spread you would need Nu's realised asset yield, which this workbook does not carry. The structural risk is the same either way — what happens if Brazil caps rates, or if losses rise faster than Nu can reprice.`,
     sources: [SHEETS.rates, SHEETS.aq],
-    formula: "price gap = Nu personal-loan rate − Itaú's;  loss gap = Nu cost of risk − Itaú's;  cover = price gap ÷ loss gap",
+    formula: "price premium = Nu personal-loan rate − Itaú's;  loss premium = Nu cost of risk − Itaú's;  the two are reported separately, not divided",
     steps,
     caveats: [
-      "The rate is the headline APR on new non-payroll personal loans; cost of risk is measured across each bank's whole book. They are the closest comparable pair the workbook offers, not a margin calculation.",
+      "The rate is the headline APR on new non-payroll personal loans; cost of risk is measured across each bank's whole book. They are the closest comparable pair the workbook offers — but they describe different portfolios, so neither their ratio nor their difference is a margin.",
       "Nu's realised asset yield is well below its personal-loan APR — credit cards, promotional rates and payroll loans all earn less.",
       "Funding costs differ; a cheaper deposit base is part of why Nu can price where it does.",
     ],

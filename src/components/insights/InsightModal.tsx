@@ -9,7 +9,7 @@ import type { Insight } from "../../insights/types";
 import { t, font } from "../../theme";
 import { EvidenceChart } from "./EvidenceChart";
 import { KindBadge } from "./InsightCard";
-import { WORKBOOK } from "../SourceTrail";
+import { WORKBOOK } from "../../data/datasets";
 
 const mono = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
 

@@ -164,7 +164,6 @@ function buildVerdicts(): { npl: Verdict; early: Verdict; peer: Verdict; househo
   const corAvg = corIncs.reduce((a, b) => a + b.v, 0) / corIncs.length;
   const corAt = lp(costOfRisk, "Nu");
   const itCor = lv(costOfRisk, "Itaú")!;
-  const cover = (nuRate - itRate) / (nuCor - itCor);
 
   return {
     npl: {
@@ -193,8 +192,11 @@ function buildVerdicts(): { npl: Verdict; early: Verdict; peer: Verdict; househo
       detail: `Latest quarter (${rateAt}), non-payroll personal loans: ${rateRanked.map((r) => `${r.label} ${fmt(r.v)}`).join(" · ")}. Nu prices ${(nuRate / itRate).toFixed(2)}× Itaú — the revenue side of the extra default risk in the charts above.`,
     },
     cor: {
-      answer: `Nu loses ${fmt(nuCor)} of its book a year to credit — but charges ${signed(nuRate - itRate)}pp more than Itaú to carry ${signed(nuCor - itCor)}pp more loss.`,
-      detail: `Cost of risk (${corAt}) = annualised provisions ÷ loans, the same unit as the rate chart. Nu ${fmt(nuCor)} vs an incumbent average of ${fmt(corAvg)} (${corIncs.map((i) => `${i.label} ${fmt(i.v)}`).join(" · ")}). Against Itaú specifically, Nu's price premium covers its loss premium ${cover.toFixed(1)}× — the whole high-price/high-loss model in two numbers.`,
+      answer: `Nu loses ${fmt(nuCor)} of its book a year to credit — ${signed(nuCor - itCor)}pp more than Itaú, against a ${signed(nuRate - itRate)}pp pricing premium.`,
+      // The two premiums sit on different portfolios (one product's APR vs the
+      // whole book's provisions), so they are shown side by side and never
+      // divided into a cover ratio.
+      detail: `Cost of risk (${corAt}) = annualised provisions ÷ loans. Nu ${fmt(nuCor)} vs an incumbent average of ${fmt(corAvg)} (${corIncs.map((i) => `${i.label} ${fmt(i.v)}`).join(" · ")}). Nu's pricing premium over Itaú on personal loans is the larger of the two figures, but it is measured on one product's new lending while cost of risk spans the whole book — read them together, not as a ratio.`,
     },
   };
 }

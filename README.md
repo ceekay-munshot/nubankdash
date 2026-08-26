@@ -58,17 +58,28 @@ crashing the app.
 
 All series are bundled in [`src/data/datasets.ts`](src/data/datasets.ts) and
 [`src/data/absolutes.ts`](src/data/absolutes.ts), generated from the
-`Nu_Brazil.xlsx` (08.24.2026) workbook. Regenerate with:
+`Nu_Brazil.xlsx` (08.24.2026) workbook — the edition stamp is derived, not
+typed. Regenerate with:
 
 ```bash
 python3 scratchpad/parse.py path/to/Nu_Brazil.xlsx          # rewrite both files
 python3 scratchpad/parse.py path/to/Nu_Brazil.xlsx --check  # audit only
 ```
 
-Both modes **fail closed**: if the workbook contains a balance the parser judges
-implausible for a loan stock and that cell is not in the documented de-spike
-list, they print it and exit non-zero — the write mode refuses to write anything.
-A bad cell cannot reach the dashboard just because nobody read stdout.
+Both modes **fail closed** — they print the problem and exit non-zero, and the
+write mode refuses to write anything — in two cases:
+
+- a balance the parser judges implausible for a loan stock that is *not* in the
+  documented de-spike list, so a bad cell cannot reach the dashboard just
+  because nobody read stdout; and
+- a de-spike that has gone **stale**: each listed coordinate is re-validated
+  leave-one-out against the refreshed workbook, so if a later edition corrects
+  one of these cells the parser refuses to keep nulling a good value.
+
+The workbook **edition** is derived at generation time (from the filename, or
+the document's own last-modified date) and emitted as `WORKBOOK`, which the
+provenance card and the insight modal import — a refresh cannot leave the
+dashboard describing new data as though it came from the previous workbook.
 
 Notes on method:
 
@@ -80,7 +91,9 @@ Notes on method:
 - **TPV share** = issuer card TPV (R$ bn) ÷ the 8 tracked issuers.
 - **Asset-quality** series are the published system / peer NPL ratios (%).
 - **Rates** are the BCB weekly personal-loan series, averaged into calendar
-  quarters; quarters with fewer than 6 weekly readings are dropped.
+  quarters. A quarter is dropped if it holds fewer than 6 weekly readings, and a
+  lender's own value is dropped if *that lender* reported fewer than 6 times in
+  it — an otherwise complete quarter can still be near-empty for one bank.
 - Source keystroke outliers (an unsecured balance keyed as `24` for ~26,000, a
   credit-card balance of `417390`, a cell duplicated from the row above) are
   de-spiked to `null`. The detector re-runs over the whole workbook on every

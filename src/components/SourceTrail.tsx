@@ -3,11 +3,8 @@ import { t } from "../theme";
 import { WidgetCard } from "./WidgetCard";
 import {
   creditCardShare, tpvShare, tpvHoles, systemNpl, householdNpl, personalLoanRate, costOfRisk,
-  type ChartData,
+  WORKBOOK, type ChartData,
 } from "../data/datasets";
-
-/** The workbook edition these series were generated from. */
-export const WORKBOOK = "Nu_Brazil.xlsx (08.24.2026)";
 
 /** "1Q16–2Q26" — read off the data so the provenance copy cannot go stale. */
 function coverage(d: ChartData): string {

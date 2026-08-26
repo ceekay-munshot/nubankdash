@@ -31,6 +31,13 @@ export interface ChartData {
   series: Series[];
 }
 
+/**
+ * The workbook edition these series came from, stamped at generation time.
+ * The provenance UI reads it from here so a refresh cannot leave the dashboard
+ * describing new data as though it came from the previous workbook.
+ */
+export const WORKBOOK = "Nu_Brazil.xlsx (08.24.2026)";
+
 /** A tracked issuer the workbook is missing a card-TPV reading for. */
 export interface TpvHole {
   period: string;

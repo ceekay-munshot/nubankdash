@@ -23,7 +23,9 @@ new bad cell in a refreshed workbook cannot slip through unnoticed.
 from __future__ import annotations
 
 import json
+import re
 import sys
+import zipfile
 from pathlib import Path
 
 import openpyxl
@@ -93,6 +95,29 @@ TPV_ROWS = [("Nu", 11), ("Itaú", 7), ("BB", 5), ("Bradesco", 6), ("Santander", 
 RATE_SHEET = "Personal Loans - Interest rates"
 RATE_PERIOD_ROW = 125
 RATE_ROWS = [("Nu", 130), ("Itaú", 127), ("Bradesco", 126), ("Santander", 128), ("Caixa", 129)]
+#: Weekly readings a calendar quarter needs before its mean is published.
+MIN_WEEKS_PER_QUARTER = 6
+
+
+def workbook_edition(path):
+    """The workbook's edition stamp, e.g. "08.24.2026".
+
+    The analyst names each edition `<date>__Nu_Brazil.xlsx`, so the filename is
+    the primary source; a workbook renamed on the way here falls back to the
+    document's own last-modified date. Never hardcode this: the whole point of a
+    one-command refresh is that the next edition re-stamps itself.
+    """
+    m = re.search(r"(\d{2})\.(\d{2})\.(\d{4})", Path(path).name)
+    if m:
+        return m.group(0)
+    try:
+        core = zipfile.ZipFile(path).read("docProps/core.xml").decode("utf-8")
+        mod = re.search(r"<dcterms:modified[^>]*>(\d{4})-(\d{2})-(\d{2})", core)
+        if mod:
+            return f"{mod.group(2)}.{mod.group(3)}.{mod.group(1)}"
+    except Exception:
+        pass
+    return "unknown edition"
 
 
 # --- helpers ----------------------------------------------------------------
@@ -165,7 +190,7 @@ def detect_spikes(section, name, periods, values, floor=100.0):
 
 # --- extraction -------------------------------------------------------------
 
-def read_loans(wb, report):
+def read_loans(wb, report, stale):
     ws = wb["Loans"]
     out = {}
     for section, (hdr, first, last) in LOAN_SECTIONS.items():
@@ -196,6 +221,21 @@ def read_loans(wb, report):
 
         for name in list(rows):
             rows[name] = fill_interior_zeros(rows[name])
+
+            listed = [p for p in labels if (section, name, p) in SPIKES]
+            # Leave-one-out: null every OTHER listed cell in this series, then
+            # check the one under test is still an excursion. Without this, a
+            # workbook that CORRECTS a listed cell would go on being nulled
+            # forever - and the detector, which runs after the fixes, could
+            # never notice the exception had gone stale.
+            for target in listed:
+                probe = list(rows[name])
+                for i, p in enumerate(labels):
+                    if p != target and (section, name, p) in SPIKES:
+                        probe[i] = None
+                if not any(d[2] == target for d in detect_spikes(section, name, labels, probe)):
+                    stale.append((section, name, target, rows[name][labels.index(target)]))
+
             for i, p in enumerate(labels):
                 if (section, name, p) in SPIKES:
                     rows[name][i] = None
@@ -322,7 +362,7 @@ def read_rates(wb):
 
     # A quarter needs enough weekly readings for its mean to mean anything; the
     # workbook's first and last quarters are stubs (1 and 3 weeks).
-    quarters = [q for q in quarters if len(buckets[q]) >= 6]
+    quarters = [q for q in quarters if len(buckets[q]) >= MIN_WEEKS_PER_QUARTER]
 
     rows = {}
     for name, r in RATE_ROWS:
@@ -330,7 +370,10 @@ def read_rates(wb):
         rows[name] = []
         for q in quarters:
             vals = [weekly[i] for i in buckets[q] if weekly[i] is not None]
-            rows[name].append(r1(100 * sum(vals) / len(vals)) if vals else None)
+            # A quarter can be well covered overall while one lender reported in
+            # only a week or two of it; publishing that as "the quarterly rate"
+            # would break the documented method for that lender alone.
+            rows[name].append(r1(100 * sum(vals) / len(vals)) if len(vals) >= MIN_WEEKS_PER_QUARTER else None)
     return {"periods": quarters, "rows": rows}
 
 
@@ -354,7 +397,7 @@ def chart(name, data, order, note=""):
     return (note + "\n" if note else "") + "\n".join(lines)
 
 
-HEADER_DATASETS = '''// AUTO-GENERATED from the Nu Brazil workbook (08.24.2026).
+HEADER_DATASETS = '''// AUTO-GENERATED from the Nu Brazil workbook ({edition}).
 // Source sheets: Loans, TPV_Market share, Asset quality, Asset Quality
 // (household), Personal Loans - Interest rates. Do not edit by hand;
 // regenerate with `python3 scratchpad/parse.py <workbook.xlsx>`.
@@ -387,6 +430,13 @@ export interface ChartData {
   series: Series[];
 }
 
+/**
+ * The workbook edition these series came from, stamped at generation time.
+ * The provenance UI reads it from here so a refresh cannot leave the dashboard
+ * describing new data as though it came from the previous workbook.
+ */
+export const WORKBOOK = "Nu_Brazil.xlsx ({edition})";
+
 /** A tracked issuer the workbook is missing a card-TPV reading for. */
 export interface TpvHole {
   period: string;
@@ -401,7 +451,7 @@ export interface TpvHole {
 }
 '''
 
-HEADER_ABSOLUTES = '''// AUTO-GENERATED from the Nu Brazil workbook (08.24.2026) - Loans sheet.
+HEADER_ABSOLUTES = '''// AUTO-GENERATED from the Nu Brazil workbook ({edition}) - Loans sheet.
 // Absolute loan balances in R$ mn (despiked like the share series). "Nu" is the
 // sum of Nu's two Brazilian legal entities; "System" is the sheet's Total row
 // (IF.data's independent system total, NOT a sum of the listed banks - so a
@@ -440,7 +490,8 @@ def main():
     wb = openpyxl.load_workbook(args[0], data_only=True)
 
     report: list = []
-    loans = read_loans(wb, report)
+    stale: list = []
+    loans = read_loans(wb, report, stale)
     tpv, holes = read_tpv(wb)
     aq = read_asset_quality(wb)
     hh = read_household(wb)
@@ -456,23 +507,35 @@ def main():
                 "Add it to SPIKES (with the reason) if it is a source error, or widen\n"
                 "detect_spikes if it is genuine. Refusing to write until then."
             )
+        print(f"\nstale de-spikes (listed, but the cell is no longer anomalous): {len(stale)}")
+        for sec, nm, per, val in stale:
+            print(f"  {sec:11s} {nm:10s} {per:5s}  now reads {val:,.0f}")
+        if stale:
+            print(
+                "\nThe workbook appears to have CORRECTED these cells. Leaving them in\n"
+                "SPIKES would null a good value forever, so remove each entry and\n"
+                "re-run. Refusing to write until then."
+            )
 
     if check:
+        print(f"workbook edition: {workbook_edition(args[0])}")
         print("documented de-spikes applied:")
         for (sec, nm, per), why in SPIKES.items():
             print(f"  {sec:11s} {nm:10s} {per:5s}  {why}")
         print()
         report_survivors()
         print(f"TPV holes (issuer nulled, denominator interpolated): {holes or 'none'}")
-        return 1 if report else 0
+        return 1 if (report or stale) else 0
 
-    # Never serialise a value the parser already knows is implausible: it would
-    # flow straight into the published shares and every insight built on them.
-    if report:
+    # Never serialise a value the parser already knows is implausible, and never
+    # null a cell the workbook has since corrected: both would flow straight into
+    # the published shares and every insight built on them.
+    if report or stale:
         report_survivors()
         return 1
 
-    ds = [HEADER_DATASETS]
+    edition = workbook_edition(args[0])
+    ds = [HEADER_DATASETS.replace("{edition}", edition)]
     ds.append(chart("creditCardShare", loan_shares(loans["creditCard"]), SHARE_ORDER))
     ds.append(chart("tpvShare", tpv, [n for n, _ in TPV_ROWS]))
     ds.append(tpv_holes_ts(holes, set(tpv["periods"])))
@@ -487,12 +550,12 @@ def main():
     ds.append(chart("personalLoanRate", rates, [n for n, _ in RATE_ROWS]))
     (OUT / "datasets.ts").write_text("\n\n".join(ds) + "\n", encoding="utf-8")
 
-    ab = [HEADER_ABSOLUTES]
+    ab = [HEADER_ABSOLUTES.replace("{edition}", edition)]
     for key, name in (("creditCard", "loanAbsCreditCard"), ("unsecured", "loanAbsUnsecured"), ("payroll", "loanAbsPayroll")):
         ab.append(chart(name, {"periods": loans[key]["periods"], "rows": {k: [None if v is None else round(v) for v in vs] for k, vs in loans[key]["rows"].items()}}, LOAN_ORDER))
     (OUT / "absolutes.ts").write_text("\n\n".join(ab) + "\n", encoding="utf-8")
 
-    print(f"wrote {OUT/'datasets.ts'} and {OUT/'absolutes.ts'}")
+    print(f"wrote {OUT/'datasets.ts'} and {OUT/'absolutes.ts'} (workbook edition {edition})")
     if holes:
         print(f"note: TPV holes (issuer nulled, denominator interpolated): {holes}")
     return 0
