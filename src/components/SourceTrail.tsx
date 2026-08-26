@@ -3,6 +3,7 @@ import { t } from "../theme";
 import { WidgetCard } from "./WidgetCard";
 import {
   creditCardShare, tpvShare, tpvHoles, systemNpl, householdNpl, personalLoanRate, costOfRisk,
+  peerEarlyNpl, peerNpl15d, peerStage3, peerWriteOffs,
   WORKBOOK, type ChartData,
 } from "../data/datasets";
 
@@ -75,6 +76,13 @@ const SOURCES: SourceEntry[] = [
     detail:
       `Annualised credit provisions ÷ loans (% a.a.), ${coverage(costOfRisk)}. The only series here in the same unit as an interest rate, ` +
       "which is what makes the price-of-risk comparison possible.",
+  },
+  {
+    title: "Four more credit-risk views — bank disclosures",
+    detail:
+      `Early NPL, NPL over 15 days, "Stage 3" and write-offs, bank by bank (%), ${coverage(peerNpl15d)}. ` +
+      "Each answers the same question — whose loans are in trouble — a different way; see the Credit risk section for what makes them differ. " +
+      `Coverage varies by bank and metric: ${coverage(peerEarlyNpl)} for early NPL, ${coverage(peerStage3)} for Stage 3, ${coverage(peerWriteOffs)} for write-offs.`,
   },
 ];
 

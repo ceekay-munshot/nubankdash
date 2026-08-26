@@ -23,6 +23,19 @@ SDK** (session token + selected ticker are supplied by the host).
   almost only to households; the incumbents' whole-bank ratio is diluted by
   mortgages and corporate loans, which is worth ~1.6pp of the apparent gap
 
+**Credit risk, checked four more ways** (bank by bank — same question as
+above, measured differently, so every credit-risk series in the workbook has
+a chart)
+
+- **Early NPL (peer)** — the leading-indicator version of the peer NPL ratio,
+  by bank rather than by product; flags trouble before it's 90 days overdue
+- **NPL over 15 days (peer)** — a wider net than the 90-day ratio; reads
+  higher for every bank, so the ranking is the useful part, not the level
+- **Stage 3 (peer)** — each bank's own IFRS9 "credit-impaired" classification,
+  a forward-looking flag rather than a days-overdue count
+- **Write-offs (peer)** — loans a bank has fully given up on and booked as a
+  realised loss, the step that comes after cost of risk (below)
+
 **Pricing** (what each bank charges, and what the lending costs)
 
 - **Personal-loan interest rate** — BCB weekly rate on non-payroll, pre-fixed
@@ -42,8 +55,8 @@ buy-side-oriented findings computed at load time by the insight engine
 ([`src/insights/engine.ts`](src/insights/engine.ts)) from the same bundled
 series — e.g. the TPV-vs-credit monetization gap, the record share grab in a
 shrinking market, mix-weighted NPL exposure vs incumbents, the like-for-like
-household default premium, the price-of-risk cover ratio, and the measured (not
-assumed) early-NPL lead-lag. Clicking any card opens a transparency modal with
+household default premium, the pricing-vs-cost-of-risk premium pair, and the
+measured (not assumed) early-NPL lead-lag. Clicking any card opens a transparency modal with
 the source sheets, every arithmetic step shown with the real values, the one-line
 formula, an evidence chart, and the caveats.
 
@@ -67,15 +80,13 @@ python3 scratchpad/parse.py path/to/Nu_Brazil.xlsx          # rewrite both files
 python3 scratchpad/parse.py path/to/Nu_Brazil.xlsx --check  # audit only
 ```
 
-Both modes **fail closed** — they print the problem and exit non-zero, and the
-write mode refuses to write anything — in two cases:
-
-- a balance the parser judges implausible for a loan stock that is *not* in the
-  documented de-spike list, so a bad cell cannot reach the dashboard just
-  because nobody read stdout; and
-- a de-spike that has gone **stale**: each listed coordinate is re-validated
-  leave-one-out against the refreshed workbook, so if a later edition corrects
-  one of these cells the parser refuses to keep nulling a good value.
+The workbook is **trusted as uploaded** — the regenerator never refuses to
+write. It does run a plausibility scan for loan-stock excursions (a balance far
+off on the same side of both neighbouring quarters) and prints anything it
+notices under `--check` or on a normal run, purely as an FYI; nothing in this
+script blocks or exits non-zero because of what that scan finds. If a future
+workbook contains a genuine keying error, add it to `SPIKES` (with a reason) so
+the fix is documented, the same as the six corrections already there.
 
 The workbook **edition** is derived at generation time (from the filename, or
 the document's own last-modified date) and emitted as `WORKBOOK`, which the
@@ -90,7 +101,10 @@ Notes on method:
 - **Loan share** = entity balance ÷ the sheet's own system total (IF.data), never
   a sum of the listed banks — so one bad cell cannot move Nu's share.
 - **TPV share** = issuer card TPV (R$ bn) ÷ the 8 tracked issuers.
-- **Asset-quality** series are the published system / peer NPL ratios (%).
+- **Asset-quality** series are the published system / peer NPL ratios (%), plus
+  four more per-bank views (early NPL, NPL over 15 days, Stage 3, write-offs)
+  extracted the same way — see `AQ_BLOCKS` in `scratchpad/parse.py` for what
+  each row measures.
 - **Rates** are the BCB weekly personal-loan series, averaged into calendar
   quarters. A quarter is dropped if it holds fewer than 6 weekly readings, and a
   lender's own value is dropped if *that lender* reported fewer than 6 times in
@@ -109,6 +123,23 @@ Notes on method:
   it did as `tpvHoles`, and the in-app "Sources & method" card reports it from
   there — a dropped quarter is invisible if you try to re-derive it from the
   published shares.
+
+### Deliberately not wired
+
+Two things on the `Personal Loans - Interest rates` sheet are left out, both
+found while checking the workbook for anything missing from the dashboard —
+see `read_rates()` in `scratchpad/parse.py` for the full reasoning:
+
+- A second block that restates the same 5-bank rates as a monthly-equivalent
+  figure (`((1 + rate) ^ (1/12)) - 1`). Same numbers, different unit — charting
+  it too would just show the same fact twice under a different label.
+- The sheet's own "Average of % a.a." row, which looks like a genuine
+  ~120-lender market average. It was, historically, but the underlying
+  per-lender table stopped being updated for most lenders after 4Q24: in the
+  newest quarter this workbook covers, only 7 of ~120 rows still report, one of
+  which (Banco BMG) prints ~495% a.a. Publishing that under a "market average"
+  label in the newest, most-relevant quarters would be misleading, not merely
+  incomplete, so it's left off.
 
 ### Restatements in this edition vs the 05.20.2026 workbook
 
