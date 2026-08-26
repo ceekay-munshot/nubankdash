@@ -31,6 +31,19 @@ export interface ChartData {
   series: Series[];
 }
 
+/** A tracked issuer the workbook is missing a card-TPV reading for. */
+export interface TpvHole {
+  period: string;
+  issuer: string;
+  /**
+   * true  - the issuer's own share is null and the denominator was repaired by
+   *         interpolation, so the issuers that DID report keep their true share.
+   * false - no later reading to interpolate from, so the whole period is absent
+   *         from `tpvShare` rather than published with a short denominator.
+   */
+  repaired: boolean;
+}
+
 
 export const creditCardShare: ChartData = {
   periods: ["2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022", "1Q23", "2Q23", "3Q23", "4Q23", "1Q24", "2Q24", "3Q24", "4Q24", "1Q25", "2Q25", "3Q25", "4Q25", "1Q26"],
@@ -58,6 +71,11 @@ export const tpvShare: ChartData = {
     { name: "XP", values: [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 0.11, 0.43, 0.6, 0.7, 0.75, 0.83, 0.97, 1.12, 1.25, 1.37, 1.44, 1.47, 1.5, 1.47, 1.49, 1.49, 1.49, 1.46, 1.49, 1.53, 1.51] },
   ],
 };
+
+export const tpvHoles: TpvHole[] = [
+  { period: "3Q25", issuer: "Caixa", repaired: true },
+  { period: "2Q26", issuer: "Caixa", repaired: false }
+];
 
 export const unsecuredShare: ChartData = {
   periods: ["2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022", "1Q23", "2Q23", "3Q23", "4Q23", "1Q24", "2Q24", "3Q24", "4Q24", "1Q25", "2Q25", "3Q25", "4Q25", "1Q26"],

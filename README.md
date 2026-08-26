@@ -65,6 +65,11 @@ python3 scratchpad/parse.py path/to/Nu_Brazil.xlsx          # rewrite both files
 python3 scratchpad/parse.py path/to/Nu_Brazil.xlsx --check  # audit only
 ```
 
+Both modes **fail closed**: if the workbook contains a balance the parser judges
+implausible for a loan stock and that cell is not in the documented de-spike
+list, they print it and exit non-zero — the write mode refuses to write anything.
+A bad cell cannot reach the dashboard just because nobody read stdout.
+
 Notes on method:
 
 - **Nu** is the sum of its two Brazilian legal entities (Nu Pagamentos + Nu
@@ -78,14 +83,18 @@ Notes on method:
   quarters; quarters with fewer than 6 weekly readings are dropped.
 - Source keystroke outliers (an unsecured balance keyed as `24` for ~26,000, a
   credit-card balance of `417390`, a cell duplicated from the row above) are
-  de-spiked to `null`. `--check` re-runs the detector over the whole workbook and
-  reports anything that survives, so a new bad cell in a refreshed workbook
-  cannot slip through silently.
+  de-spiked to `null`. The detector re-runs over the whole workbook on every
+  invocation and each documented de-spike is independently re-detected when
+  removed from the list, so the list cannot rot and a new bad cell cannot slip
+  through silently.
 - Where the workbook is **missing** one tracked issuer's card TPV for a quarter
   (Caixa, 3Q25 and 2Q26 in this edition), that issuer's own share is `null` and
   the denominator is repaired by interpolation — otherwise the missing ~9% of
   volume would silently inflate all seven issuers that did report. A quarter with
-  no later reading to interpolate from is dropped entirely.
+  no later reading to interpolate from is dropped entirely. The parser emits what
+  it did as `tpvHoles`, and the in-app "Sources & method" card reports it from
+  there — a dropped quarter is invisible if you try to re-derive it from the
+  published shares.
 
 ### Restatements in this edition vs the 05.20.2026 workbook
 

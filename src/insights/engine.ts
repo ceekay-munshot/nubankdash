@@ -468,6 +468,18 @@ function insightUnsecuredCapture(): Insight {
     (100 * (at(loanAbsUnsecured, "Nu", P0) - at(loanAbsUnsecured, "Nu", P00))) /
     (at(loanAbsUnsecured, "System", P0) - at(loanAbsUnsecured, "System", P00));
 
+  // How the eight banks the sheet DOES list compare with the system total. This
+  // has to be measured, not assumed: in some windows the unlisted banks supply
+  // growth, in others they shrink, and the two capture ratios swap places.
+  const LISTED = ["Nu", "Itaú", "Bradesco", "Santander", "Caixa", "BB", "Inter", "XP"];
+  const dListed = LISTED.reduce((sum, b) => {
+    const v0 = ser(loanAbsUnsecured, b)[loanAbsUnsecured.periods.indexOf(P0)];
+    const v1 = ser(loanAbsUnsecured, b)[loanAbsUnsecured.periods.indexOf(P1)];
+    return v0 == null || v1 == null ? sum : sum + (v1 - v0);
+  }, 0);
+  const captureListed = (100 * dNu) / dListed;
+  const dUnlisted = dSys - dListed;
+
   const steps: CalcStep[] = [
     { label: "How much unsecured lending Brazil ADDED in a year", math: `${mn(sys1)} − ${mn(sys0)}`, result: `+${mn(dSys)} (R$ mn)`, source: `${SHEETS.loans} · Total · ${P0}→${P1}` },
     { label: "How much of that came from Nu", math: `${mn(nu1)} − ${mn(nu0)}`, result: `+${mn(dNu)} (Nu's own book grew ${signed(100 * (nu1 / nu0 - 1), 0)}% in the year)`, source: `${SHEETS.loans} · Nu rows` },
@@ -490,7 +502,9 @@ function insightUnsecuredCapture(): Insight {
     steps,
     caveats: [
       `One-year window — this ratio bounces around: the previous year read ${f(prevCapture, 0)}%. It rises whenever the system total grows slowly, not only when Nu grows fast.`,
-      "Brazil's total includes banks not listed in the sheet (~40% of the growth) — so Nu's slice of the LISTED banks' growth is even bigger.",
+      dUnlisted >= 0
+        ? `Brazil's total includes banks the sheet doesn't list; they supplied ${mn(dUnlisted)} of the ${mn(dSys)} growth, so measured against the eight listed banks alone Nu's slice is ${f(captureListed, 0)}%.`
+        : `The eight listed banks grew ${mn(dListed)} between them while the whole system grew only ${mn(dSys)} — the banks the sheet doesn't list SHRANK by ${mn(-dUnlisted)}. Measured against the listed banks alone Nu's slice is ${f(captureListed, 0)}%, lower than the ${f(capture, 0)}% headline.`,
       "The workbook gives Nu's whole-bank NPL but not its default rate on this product specifically; the rising system rate is the market backdrop, not Nu's realised losses.",
     ],
     evidence: {
@@ -541,7 +555,7 @@ function insightPayrollEntry(): Insight {
     confidence: "Medium",
     title: `Nu is sprinting into payroll loans just as the big banks walk out`,
     takeaway: `Nu's payroll-loan book (loans repaid straight out of salaries) grew ${signed(yoy, 0)}% in the year to ${nuNow.period}, while Santander's sits ${f(santDraw)}% below its peak. It's Nu's safest product — and growing it directly waters down the riskiness of Nu's overall loan menu.`,
-    stat: { value: `${signed(yoy, 0)}%`, label: `growth in Nu's payroll loans in the year to ${nuNow.period} — from a ${f(last(payrollShare, "Nu").value, 2)}% share` },
+    stat: { value: `${signed(yoy, 0)}%`, label: `growth in Nu's payroll loans in the year to ${nuNow.period} — from a ${f(at(payrollShare, "Nu", nuYAgo.period), 2)}% share to ${f(last(payrollShare, "Nu").value, 2)}%` },
     detail: `Payroll loans get deducted from paychecks before the borrower can spend the money, which is why they run ${f(cNpl / pNpl, 1)}× fewer defaults than credit cards — even now, at ${pNpl >= pMax - 1e-9 ? "the product's worst-ever" : "an elevated"} ${f(pNpl)}%. The timing is the story: Nu scales in exactly when a big incumbent retreats and the product's defaults ${pNpl >= pMax - 1e-9 ? "peak" : "run high"} — a classic contrarian entry. And it connects to the 'loan menu' insight: every 1% of Nu's book that shifts from cards to payroll trims about ${f(mixCut, 1)}bp of built-in risk.`,
     sources: [SHEETS.loans, SHEETS.aq],
     formula: `year growth = Nu(${nuNow.period}) ÷ Nu(${nuYAgo.period}) − 1;  Santander pullback = now ÷ peak − 1;  risk effect = card defaults − payroll defaults, per 1% of book shifted`,

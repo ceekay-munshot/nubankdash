@@ -2,7 +2,7 @@
 import { t } from "../theme";
 import { WidgetCard } from "./WidgetCard";
 import {
-  creditCardShare, tpvShare, systemNpl, householdNpl, personalLoanRate, costOfRisk,
+  creditCardShare, tpvShare, tpvHoles, systemNpl, householdNpl, personalLoanRate, costOfRisk,
   type ChartData,
 } from "../data/datasets";
 
@@ -14,17 +14,33 @@ function coverage(d: ChartData): string {
   return `${d.periods[0]}–${d.periods[d.periods.length - 1]}`;
 }
 
-/** Periods where a series has no value for ANY entity — a hole in the source. */
-function gaps(d: ChartData): string[] {
-  return d.periods.filter((_, i) => d.series.every((s) => s.values[i] === null));
-}
-
 interface SourceEntry {
   title: string;
   detail: string;
 }
 
-const tpvGaps = gaps(tpvShare);
+/**
+ * The TPV holes are reported by the parser rather than re-derived from the
+ * shares: an issuer nulled mid-series looks like an ordinary null here, and a
+ * period the parser dropped entirely is invisible from the data alone.
+ */
+function tpvHoleNote(): string {
+  if (tpvHoles.length === 0) return "Nu reported from 1Q21.";
+  const repaired = tpvHoles.filter((h) => h.repaired);
+  const dropped = tpvHoles.filter((h) => !h.repaired);
+  const list = (hs: typeof tpvHoles) =>
+    hs.map((h) => `${h.issuer} ${h.period}`).join(", ");
+  return [
+    repaired.length
+      ? `The workbook is missing ${list(repaired)}. That issuer's own share is left blank and the denominator is repaired by interpolation, so the issuers that did report keep their true share instead of all eight being inflated by the missing volume.`
+      : "",
+    dropped.length
+      ? `${list(dropped)} is missing with no later reading to interpolate from, so that quarter is not published at all.`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
 
 const SOURCES: SourceEntry[] = [
   {
@@ -37,9 +53,7 @@ const SOURCES: SourceEntry[] = [
     title: "Card TPV — issuer disclosures",
     detail:
       `Quarterly credit + debit TPV (R$ bn) for the 8 tracked issuers, ${coverage(tpvShare)}; share = issuer ÷ tracked-issuer total. ` +
-      (tpvGaps.length
-        ? `No share is published for ${tpvGaps.join(", ")}: Caixa's volume is missing from the workbook for those quarters, which would silently inflate every other issuer's share.`
-        : "Nu reported from 1Q21."),
+      tpvHoleNote(),
   },
   {
     title: "System & peer NPL — central-bank / IR reports",

@@ -386,6 +386,19 @@ export interface ChartData {
   periods: string[];
   series: Series[];
 }
+
+/** A tracked issuer the workbook is missing a card-TPV reading for. */
+export interface TpvHole {
+  period: string;
+  issuer: string;
+  /**
+   * true  - the issuer's own share is null and the denominator was repaired by
+   *         interpolation, so the issuers that DID report keep their true share.
+   * false - no later reading to interpolate from, so the whole period is absent
+   *         from `tpvShare` rather than published with a short denominator.
+   */
+  repaired: boolean;
+}
 '''
 
 HEADER_ABSOLUTES = '''// AUTO-GENERATED from the Nu Brazil workbook (08.24.2026) - Loans sheet.
@@ -410,6 +423,15 @@ import type { ChartData } from "./datasets";
 '''
 
 
+def tpv_holes_ts(holes, periods):
+    """Emit the TPV holes as data so the provenance UI reports what really happened."""
+    rows = ",\n".join(
+        f'  {{ period: {json.dumps(p)}, issuer: {json.dumps(n, ensure_ascii=True)}, repaired: {"true" if p in periods else "false"} }}'
+        for p, n in holes
+    )
+    return "export const tpvHoles: TpvHole[] = [\n" + rows + "\n];" if rows else "export const tpvHoles: TpvHole[] = [];"
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if not args:
@@ -424,19 +446,36 @@ def main():
     hh = read_household(wb)
     rates = read_rates(wb)
 
+    def report_survivors():
+        print(f"implausible stocks surviving the documented fixes: {len(report)}")
+        for r in report:
+            print(f"  {r[0]:11s} {r[1]:10s} {r[2]:5s}  {r[3]:,.0f} -> {r[4]:,.0f} -> {r[5]:,.0f}")
+        if report:
+            print(
+                "\nEach line is a balance the parser believes cannot belong to a loan stock.\n"
+                "Add it to SPIKES (with the reason) if it is a source error, or widen\n"
+                "detect_spikes if it is genuine. Refusing to write until then."
+            )
+
     if check:
         print("documented de-spikes applied:")
         for (sec, nm, per), why in SPIKES.items():
             print(f"  {sec:11s} {nm:10s} {per:5s}  {why}")
-        print(f"\nimplausible stocks surviving the fixes: {len(report)}")
-        for s in report:
-            print(f"  {s[0]:11s} {s[1]:10s} {s[2]:5s}  {s[3]:,.0f} -> {s[4]:,.0f} -> {s[5]:,.0f}")
+        print()
+        report_survivors()
         print(f"TPV holes (issuer nulled, denominator interpolated): {holes or 'none'}")
-        return
+        return 1 if report else 0
+
+    # Never serialise a value the parser already knows is implausible: it would
+    # flow straight into the published shares and every insight built on them.
+    if report:
+        report_survivors()
+        return 1
 
     ds = [HEADER_DATASETS]
     ds.append(chart("creditCardShare", loan_shares(loans["creditCard"]), SHARE_ORDER))
     ds.append(chart("tpvShare", tpv, [n for n, _ in TPV_ROWS]))
+    ds.append(tpv_holes_ts(holes, set(tpv["periods"])))
     ds.append(chart("unsecuredShare", loan_shares(loans["unsecured"]), SHARE_ORDER))
     ds.append(chart("payrollShare", loan_shares(loans["payroll"]), SHARE_ORDER))
     ds.append(chart("systemNpl", aq["systemNpl"], [n for n, _ in AQ_BLOCKS["systemNpl"]]))
@@ -454,11 +493,10 @@ def main():
     (OUT / "absolutes.ts").write_text("\n\n".join(ab) + "\n", encoding="utf-8")
 
     print(f"wrote {OUT/'datasets.ts'} and {OUT/'absolutes.ts'}")
-    if report:
-        print(f"WARNING: {len(report)} implausible stock(s) survived the fixes -> re-run with --check")
     if holes:
         print(f"note: TPV holes (issuer nulled, denominator interpolated): {holes}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)
