@@ -17,12 +17,15 @@
 //    while the bank series are quarterly, so "a year back" is perYear(d) steps.
 
 import {
-  creditCardShare, tpvShare, unsecuredShare, payrollShare,
+  tpvShare,
   peerNpl, householdNpl, personalLoanRate, costOfRisk,
   type ChartData,
 } from "../data/datasets";
 import { systemNpl, systemEarlyNpl, payrollNpl, payrollEarlyNpl } from "../data/bcb";
-import { loanAbsCreditCard, loanAbsUnsecured, loanAbsPayroll } from "../data/absolutes";
+import {
+  creditCardShare, unsecuredShare, payrollShare,
+  loanAbsCreditCard, loanAbsUnsecured, loanAbsPayroll,
+} from "../data/loans";
 import { isMonthly, perYear, seasonOf, stepName, steps as nSteps } from "../lib/periods";
 import type { CalcStep, Insight } from "./types";
 
@@ -152,6 +155,12 @@ function alignTo(d: ChartData, name: string, periods: string[]): (number | null)
 
 const maxOf = (vals: (number | null)[]) => Math.max(...vals.filter((v): v is number => v !== null));
 
+/** "2Q26" -> a sortable number, so two quarter labels can be ordered. */
+const quarterIndex = (period: string) => {
+  const m = /^(\d)Q(\d{2})$/.exec(period);
+  return m ? Number(m[2]) * 4 + Number(m[1]) : NaN;
+};
+
 const f = (x: number, dp = 1) => x.toFixed(dp);
 const signed = (x: number, dp = 1) => `${x >= 0 ? "+" : ""}${x.toFixed(dp)}`;
 /** R$ mn -> compact bn string. */
@@ -236,7 +245,7 @@ function insightMonetizationGap(): Insight {
       "Card spending (TPV) includes debit and prepaid purchases; Nu's customers use debit a lot, so part of the gap may never convert into loans.",
     ...(nuTpv.period === nuLoan.period
       ? []
-      : [`The two readings are a quarter apart (spending is ${nuTpv.period}, lending is ${nuLoan.period}) — card volumes publish before IF.data balances.`]),
+      : [`The two readings are from different quarters (spending is ${nuTpv.period}, lending is ${nuLoan.period}) — ${quarterIndex(nuTpv.period) > quarterIndex(nuLoan.period) ? "card volumes publish before IF.data balances" : "IF.data balances are published before the issuers' card volumes reach the workbook"}.`]),
       "Itaú's conversion rate is boosted by corporate and premium cards Nu doesn't offer (yet).",
     ],
     evidence: {
@@ -641,7 +650,7 @@ function insightUnsecuredCapture(): Insight {
     id: "unsecured-capture",
     kind: "risk",
     confidence: "High",
-    title: `One bank, ${capture >= 45 ? "most" : capture >= 28 ? "a third" : "a fifth"} of the growth: Nu took ${f(capture, 0)}% of all new unsecured lending`,
+    title: `One bank, ${capture > 50 ? "most" : capture >= 40 ? "nearly half" : capture >= 28 ? "a third" : "a fifth"} of the growth: Nu took ${f(capture, 0)}% of all new unsecured lending`,
     takeaway: `Of every new real of unsecured (no-collateral) lending Brazil added in the year to ${P1}, ${f(capture, 0)} cents came from Nu — ${f(ratio, 1)}× more than its ${f(share, 0)}% market share would suggest. And it happened while that product's default rate climbed from ${f(low.value)}% to ${f(nplNow.value)}%.`,
     stat: { value: `${f(capture, 0)}%`, label: `of Brazil's entire unsecured-lending growth came from Nu — a bank with a ${f(share)}% share` },
     detail: `Taking growth at ${f(ratio, 1)}× your market share is what winning a market looks like. Doing it while defaults in that exact product rise fastest is what buying risk at the top can look like. Both can be true at once — it depends entirely on how Nu's 2025 borrowers repay. The size of the bet is the insight: ${f(capture, 0)}% of the market's new lending in that window landed on Nu's book.`,

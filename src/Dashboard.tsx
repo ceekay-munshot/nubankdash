@@ -5,11 +5,12 @@ import { sdk } from "./lib/sdk";
 import { useHostContext } from "./hooks/useHostContext";
 import { t, font } from "./theme";
 import {
-  creditCardShare, tpvShare, unsecuredShare, payrollShare,
+  tpvShare,
   peerNpl, householdNpl, personalLoanRate, costOfRisk,
   peerEarlyNpl, peerNpl15d, peerStage3, peerWriteOffs,
   type ChartData,
 } from "./data/datasets";
+import { creditCardShare, unsecuredShare, payrollShare } from "./data/loans";
 import { systemNpl, systemEarlyNpl, payrollNpl, payrollEarlyNpl } from "./data/bcb";
 import { perYear, steps } from "./lib/periods";
 import { Header, type DashboardTab } from "./components/Header";
@@ -612,7 +613,7 @@ export function Dashboard() {
           <ShareLineChart
             data={creditCardShare}
             title="Credit-card loans — market share"
-            subtitle="Nu now ~16% of the system, from ~3% in 2019"
+            subtitle={`Nu now ~${Math.round(lv(creditCardShare, "Nu") ?? 0)}% of the system, from ~${Math.round(at(creditCardShare, "Nu", "2019") ?? 0)}% in 2019`}
             category="markets"
           />
           <ShareLineChart
@@ -624,7 +625,7 @@ export function Dashboard() {
           <ShareLineChart
             data={unsecuredShare}
             title="Unsecured loans — market share"
-            subtitle="Fastest-growing Nu book; ~15% of system"
+            subtitle={`Fastest-growing Nu book; ~${Math.round(lv(unsecuredShare, "Nu") ?? 0)}% of system`}
             category="markets"
           />
           <ShareLineChart

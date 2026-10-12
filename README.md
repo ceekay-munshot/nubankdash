@@ -9,7 +9,7 @@ SDK** (session token + selected ticker are supplied by the host).
 
 **Market share** (Nu vs Brazilian banks, time series)
 
-- **Credit-card loans** — Nu ~16% of the system (1Q26), from ~3% in 2019
+- **Credit-card loans** — Nu ~15% of the system (2Q26), from ~3% in 2019
 - **Card TPV** — Nu is the #2 issuer by payment volume (~24%)
 - **Unsecured loans** — Nu's fastest-growing book (~15%)
 - **Payroll loans** — Nu's newest entry, still well under 1% of a bank-dominated market
@@ -82,6 +82,7 @@ stamps are derived, not typed.
 |---|---|---|---|
 | `Nu_Brazil.xlsx` (08.24.2026), quarterly | loan & TPV share, peer NPL / early NPL / 15-day / Stage 3 / write-offs, household-book NPL, cost of risk, personal-loan rates | `scratchpad/parse.py` | [`src/data/datasets.ts`](src/data/datasets.ts), [`src/data/absolutes.ts`](src/data/absolutes.ts) |
 | `Bz Central Bank data.xlsx` (08.10.2026), monthly | system NPL & early NPL by product, payroll NPL & early NPL by borrower | `scratchpad/parse_bcb.py` | [`src/data/bcb.ts`](src/data/bcb.ts) |
+| BCB IF.data (online, the workbook's own source) | loan quarters newer than the workbook — currently 2Q26 | `scratchpad/fetch_ifdata.py` | [`src/data/ifdata.ts`](src/data/ifdata.ts) |
 
 ```bash
 python3 -m pip install -r scratchpad/requirements.txt          # once
@@ -89,6 +90,8 @@ python3 scratchpad/parse.py path/to/Nu_Brazil.xlsx             # rewrite dataset
 python3 scratchpad/parse.py path/to/Nu_Brazil.xlsx --check     # audit only
 python3 scratchpad/parse_bcb.py "path/to/<date> - Bz Central Bank data.xlsx"          # rewrite bcb.ts
 python3 scratchpad/parse_bcb.py "path/to/<date> - Bz Central Bank data.xlsx" --check  # audit only
+python3 scratchpad/fetch_ifdata.py            # append newer IF.data loan quarters (run after parse.py)
+python3 scratchpad/fetch_ifdata.py --check    # show what it would append, write nothing
 ```
 
 Handing `parse.py` the BCB workbook stops with a pointer to `parse_bcb.py`.
@@ -132,6 +135,28 @@ emitted as `BCB_CODES` for the provenance card. Notes on method:
   edition: public-sector payroll early NPL in Mar 2019, INSS in Feb 2014) but
   never edits or blocks — monthly arrears can genuinely jump for a month, e.g.
   when a state pays its payroll late.
+
+### Newer loan quarters from IF.data
+
+The Loans sheet of the Nu_Brazil workbook is BCB IF.data report 11 (household
+credit by modality), and IF.data often publishes a quarter before the next
+workbook edition arrives. `fetch_ifdata.py` appends those quarters to
+`ifdata.ts`, and [`src/data/loans.ts`](src/data/loans.ts) serves the
+workbook's series with them added — the workbook always wins for a quarter it
+covers, so the next edition replaces the fetched numbers automatically.
+
+- Same method as `parse.py`: R$ mn per prudential conglomerate, System = every
+  institution in the report, shares via `parse.py`'s own `loan_shares()`.
+- **Guard:** before writing, the script re-derives the workbook's newest
+  quarter from IF.data and compares every bank. The 08.24.2026 edition matches
+  1Q26 and 4Q25 to the R$ mn. A gap above 2% means the mapping has drifted and
+  the script stops without writing, rather than splice two methods into one line.
+- **Not extended this way:** card TPV (issuer disclosures, not a BCB series),
+  the peer NPL / Stage 3 / write-off / cost-of-risk charts (bank IR reports;
+  3Q26 is not reported yet), and personal-loan rates. BCB does publish the
+  rates, but no weekly sampling of its API reproduces the workbook's quarterly
+  averages exactly (best fit is still ~0.4pp off on average), so a fetched
+  quarter would not be comparable with the rest of the line.
 
 ### The Nu_Brazil workbook (quarterly)
 

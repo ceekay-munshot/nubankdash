@@ -2,10 +2,12 @@
 import { t } from "../theme";
 import { WidgetCard } from "./WidgetCard";
 import {
-  creditCardShare, tpvShare, tpvHoles, peerNpl, householdNpl, personalLoanRate, costOfRisk,
+  tpvShare, tpvHoles, peerNpl, householdNpl, personalLoanRate, costOfRisk,
   peerEarlyNpl, peerNpl15d, peerStage3, peerWriteOffs,
   WORKBOOK, type ChartData,
 } from "../data/datasets";
+import { creditCardShare } from "../data/loans";
+import { IFDATA_QUARTERS, IFDATA_FETCHED } from "../data/ifdata";
 import { systemNpl, payrollNpl, BCB_WORKBOOK, BCB_CODES } from "../data/bcb";
 
 /** "1Q16–2Q26" — read off the data so the provenance copy cannot go stale. */
@@ -57,7 +59,10 @@ const SOURCES: SourceEntry[] = [
     title: "Bank loan books — IF.data / company filings",
     detail:
       `Credit-card, unsecured & payroll balances (R$ mn), ${coverage(creditCardShare)}. Nu = Nu Pagamentos + Nu Financeira. ` +
-      "Share = entity ÷ the sheet's own system total, so one bad bank cell cannot move Nu's share.",
+      "Share = entity ÷ the sheet's own system total, so one bad bank cell cannot move Nu's share." +
+      (IFDATA_QUARTERS.length
+        ? ` ${IFDATA_QUARTERS.join(", ")} ${IFDATA_QUARTERS.length > 1 ? "are" : "is"} newer than the workbook and taken straight from BCB IF.data (fetched ${IFDATA_FETCHED}) by the same method, after re-deriving the workbook's newest quarter from IF.data and matching it bank by bank.`
+        : ""),
   },
   {
     title: "Card TPV — issuer disclosures",
