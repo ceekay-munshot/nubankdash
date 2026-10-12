@@ -16,8 +16,13 @@ SDK** (session token + selected ticker are supplied by the host).
 
 **Asset quality** (system credit cycle & peer risk, NPL %, trend charts)
 
-- **System NPL by product** — card & personal NPLs at cycle highs; payroll ~3× cleaner
-- **System early NPL by product** — the leading indicator (short-dated arrears)
+- **System NPL by product** — BCB monthly series since Mar 2011; in Aug 2026
+  card, personal-loan, payroll and household NPL are all at their worst on record
+- **System early NPL by product** — the leading indicator (15–90-day arrears)
+- **Payroll NPL by borrower** — the "safe" product split three ways: private-sector
+  workers (~10.6%, now above credit cards) vs public employees and INSS
+  retirees (~2–3%)
+- **Payroll early NPL by borrower** — the pipeline into the chart above
 - **Peer NPL ratio — whole bank** — Nu vs Itaú / Santander / Bradesco / Inter
 - **Peer NPL ratio — household books only** — the like-for-like read. Nu lends
   almost only to households; the incumbents' whole-bank ratio is diluted by
@@ -55,8 +60,9 @@ buy-side-oriented findings computed at load time by the insight engine
 ([`src/insights/engine.ts`](src/insights/engine.ts)) from the same bundled
 series — e.g. the TPV-vs-credit monetization gap, the record share grab in a
 shrinking market, mix-weighted NPL exposure vs incumbents, the like-for-like
-household default premium, the pricing-vs-cost-of-risk premium pair, and the
-measured (not assumed) early-NPL lead-lag. Clicking any card opens a transparency modal with
+household default premium, the pricing-vs-cost-of-risk premium pair, the
+measured (not assumed) early-NPL lead-lag, and the private-sector payroll
+default surge. Clicking any card opens a transparency modal with
 the source sheets, every arithmetic step shown with the real values, the one-line
 formula, an evidence chart, and the caveats.
 
@@ -69,29 +75,73 @@ crashing the app.
 
 ## Data
 
-All series are bundled in [`src/data/datasets.ts`](src/data/datasets.ts) and
-[`src/data/absolutes.ts`](src/data/absolutes.ts), generated from the
-`Nu_Brazil.xlsx` (08.24.2026) workbook — the edition stamp is derived, not
-typed. Regenerate with:
+The series come from two workbooks, each with its own regenerator; the edition
+stamps are derived, not typed.
+
+| Workbook | Feeds | Regenerator | Output |
+|---|---|---|---|
+| `Nu_Brazil.xlsx` (08.24.2026), quarterly | loan & TPV share, peer NPL / early NPL / 15-day / Stage 3 / write-offs, household-book NPL, cost of risk, personal-loan rates | `scratchpad/parse.py` | [`src/data/datasets.ts`](src/data/datasets.ts), [`src/data/absolutes.ts`](src/data/absolutes.ts) |
+| `Bz Central Bank data.xlsx` (08.10.2026), monthly | system NPL & early NPL by product, payroll NPL & early NPL by borrower | `scratchpad/parse_bcb.py` | [`src/data/bcb.ts`](src/data/bcb.ts) |
 
 ```bash
-python3 -m pip install -r scratchpad/requirements.txt       # once
-python3 scratchpad/parse.py path/to/Nu_Brazil.xlsx          # rewrite both files
-python3 scratchpad/parse.py path/to/Nu_Brazil.xlsx --check  # audit only
+python3 -m pip install -r scratchpad/requirements.txt          # once
+python3 scratchpad/parse.py path/to/Nu_Brazil.xlsx             # rewrite datasets.ts + absolutes.ts
+python3 scratchpad/parse.py path/to/Nu_Brazil.xlsx --check     # audit only
+python3 scratchpad/parse_bcb.py "path/to/<date> - Bz Central Bank data.xlsx"          # rewrite bcb.ts
+python3 scratchpad/parse_bcb.py "path/to/<date> - Bz Central Bank data.xlsx" --check  # audit only
 ```
 
-The workbook is **trusted as uploaded** — the regenerator never refuses to
+Handing `parse.py` the BCB workbook stops with a pointer to `parse_bcb.py`.
+
+The workbook **edition** is derived at generation time (from the filename, or
+the document's own last-modified date) and emitted as `WORKBOOK` /
+`BCB_WORKBOOK`, which the provenance card and the insight modal import — a
+refresh cannot leave the dashboard describing new data as though it came from
+the previous workbook.
+
+### The BCB workbook (monthly system NPL)
+
+Two sheets, `NPL` (90+ days overdue) and `Early NPL` (15–90 days), each with
+a product block (household, non-payroll personal, payroll, credit card) and a
+payroll-by-borrower block (private-sector, public-sector, INSS). Columns are
+found by their header labels, and the SGS code printed above each one is
+emitted as `BCB_CODES` for the provenance card. Notes on method:
+
+- **Monthly, not quarterly.** The axis is a contiguous month range; a month
+  the sheet skips is `null` rather than closed up. Everything that steps back
+  "a year" or compares "the same season" (KPI deltas, verdicts, insights)
+  reads the frequency off the period labels via
+  [`src/lib/periods.ts`](src/lib/periods.ts) — 12 months back here, 4
+  quarters back on the Nu_Brazil series.
+- **One copy of each series.** The Nu_Brazil workbook's `Asset quality` sheet
+  carries the same BCB product series sampled at quarter ends (rows 33–42).
+  They match to rounding, but the monthly file runs a quarter or more ahead,
+  so `parse.py` no longer emits them and the dashboard reads system NPL only
+  from `bcb.ts`. (The 2Q26 values did move: e.g. card NPL 9.6% in the old
+  copy, 9.1% for Jun 2026 here.)
+- **"All household loans" is a different series** from the household line the
+  dashboard used to chart: it is BCB's all-household total (21084 / 21005),
+  mortgages, vehicle and rural credit included. Its 90-day reading runs below
+  the old line (5.4% vs 7.2% for 1Q26) and its early reading above it, so it
+  carries a new name rather than silently replacing the old one.
+- **Payroll appears twice** (once in each block). The product block's copy is
+  used everywhere so the line reads the same in both charts; `--check` prints
+  any month where the two copies disagree (this edition: May 2026 early NPL,
+  2.83 vs 2.84).
+- **Trusted as uploaded.** A one-month-excursion scan prints FYIs (this
+  edition: public-sector payroll early NPL in Mar 2019, INSS in Feb 2014) but
+  never edits or blocks — monthly arrears can genuinely jump for a month, e.g.
+  when a state pays its payroll late.
+
+### The Nu_Brazil workbook (quarterly)
+
+The workbook is **trusted as uploaded** — `parse.py` never refuses to
 write. It does run a plausibility scan for loan-stock excursions (a balance far
 off on the same side of both neighbouring quarters) and prints anything it
 notices under `--check` or on a normal run, purely as an FYI; nothing in this
 script blocks or exits non-zero because of what that scan finds. If a future
 workbook contains a genuine keying error, add it to `SPIKES` (with a reason) so
 the fix is documented, the same as the six corrections already there.
-
-The workbook **edition** is derived at generation time (from the filename, or
-the document's own last-modified date) and emitted as `WORKBOOK`, which the
-provenance card and the insight modal import — a refresh cannot leave the
-dashboard describing new data as though it came from the previous workbook.
 
 Notes on method:
 
@@ -101,10 +151,10 @@ Notes on method:
 - **Loan share** = entity balance ÷ the sheet's own system total (IF.data), never
   a sum of the listed banks — so one bad cell cannot move Nu's share.
 - **TPV share** = issuer card TPV (R$ bn) ÷ the 8 tracked issuers.
-- **Asset-quality** series are the published system / peer NPL ratios (%), plus
-  four more per-bank views (early NPL, NPL over 15 days, Stage 3, write-offs)
+- **Asset-quality** series are the published peer NPL ratios (%), plus four
+  more per-bank views (early NPL, NPL over 15 days, Stage 3, write-offs)
   extracted the same way — see `AQ_BLOCKS` in `scratchpad/parse.py` for what
-  each row measures.
+  each row measures. System NPL by product comes from the BCB workbook (above).
 - **Rates** are the BCB weekly personal-loan series, averaged into calendar
   quarters. A quarter is dropped if it holds fewer than 6 weekly readings, and a
   lender's own value is dropped if *that lender* reported fewer than 6 times in

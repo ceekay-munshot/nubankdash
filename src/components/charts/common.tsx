@@ -48,16 +48,18 @@ export function isolatedDot(values: (number | null)[], color: string, r = 2.5) {
   };
 }
 
-/** A period is a "major" tick if it is a plain year or the first quarter (1Q). */
+/** A period is a "major" tick if it is a plain year, the first quarter (1Q) or January. */
 export function isMajor(period: string): boolean {
-  return /^\d{4}$/.test(period) || period.startsWith("1Q");
+  return /^\d{4}$/.test(period) || period.startsWith("1Q") || /^Jan \d{4}$/.test(period);
 }
 
 /** Category-axis tick that only renders text for major periods. */
 export function CategoryTick(props: any) {
   const { x, y, payload } = props;
   if (!payload || !isMajor(payload.value)) return null;
-  const label = /^\d{4}$/.test(payload.value) ? `'${payload.value.slice(2)}` : payload.value;
+  // Years and Januaries both label as '26; quarters keep their 1Q26 form.
+  const year = /^(?:Jan )?(\d{4})$/.exec(payload.value);
+  const label = year ? `'${year[1].slice(2)}` : payload.value;
   return (
     <text x={x} y={y + 12} textAnchor="middle" fontSize={10} fill={t.textMuted}>
       {label}

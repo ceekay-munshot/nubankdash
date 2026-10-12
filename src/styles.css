@@ -77,3 +77,5 @@
 .data-table thead th { position: sticky; top: 0; background: #ffffff; z-index: 1; border-bottom: 1px solid #e5e7eb; color: #6b7280; font-weight: 600; }
 .data-table tbody tr:nth-child(even) { background: rgba(249, 250, 251, 0.7); }
 .data-table td:first-child, .data-table th:first-child { background: inherit; }
+/* The sticky corner cell must stay opaque, or scrolled rows show through it. */
+.data-table thead th:first-child { background: #ffffff; z-index: 2; }

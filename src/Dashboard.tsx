@@ -6,10 +6,12 @@ import { useHostContext } from "./hooks/useHostContext";
 import { t, font } from "./theme";
 import {
   creditCardShare, tpvShare, unsecuredShare, payrollShare,
-  systemNpl, systemEarlyNpl, peerNpl, householdNpl, personalLoanRate, costOfRisk,
+  peerNpl, householdNpl, personalLoanRate, costOfRisk,
   peerEarlyNpl, peerNpl15d, peerStage3, peerWriteOffs,
   type ChartData,
 } from "./data/datasets";
+import { systemNpl, systemEarlyNpl, payrollNpl, payrollEarlyNpl } from "./data/bcb";
+import { perYear, steps } from "./lib/periods";
 import { Header, type DashboardTab } from "./components/Header";
 import { Kpi, type KpiProps } from "./components/Kpi";
 import { ShareLineChart } from "./components/charts/ShareLineChart";
@@ -28,7 +30,7 @@ function seriesByName(d: ChartData, name: string) {
   return d.series.find((s) => s.name === name);
 }
 
-/** Latest value, its period label, and its year-over-year (4-period) change. */
+/** Latest value, its period label, and its year-over-year change (4 quarters or 12 months back). */
 function latestYoY(d: ChartData, name: string): { last: number | null; period: string; deltaPP: number | null } {
   const s = seriesByName(d, name);
   if (!s) return { last: null, period: "–", deltaPP: null };
@@ -37,7 +39,7 @@ function latestYoY(d: ChartData, name: string): { last: number | null; period: s
   for (let i = vals.length - 1; i >= 0; i--) if (vals[i] !== null) { li = i; break; }
   if (li < 0) return { last: null, period: "–", deltaPP: null };
   const last = vals[li]!;
-  const prev = li - 4 >= 0 ? vals[li - 4] : null;
+  const prev = li - perYear(d) >= 0 ? vals[li - perYear(d)] : null;
   return {
     last,
     period: d.periods[li],
@@ -75,15 +77,42 @@ const lvBack = (d: ChartData, name: string, back: number) => {
   }
   return null;
 };
-/** Is the latest reading above the one before it? */
-const rising = (d: ChartData, name: string) => {
-  const prev = lvBack(d, name, 1);
-  const now = lv(d, name);
-  return prev != null && now != null && now > prev;
-};
 /** Highest reading a series has ever printed. */
 const peak = (d: ChartData, name: string) =>
   Math.max(...(seriesByName(d, name)?.values ?? []).filter((v): v is number => v != null));
+/** Change vs the same period a year earlier (12 months or 4 quarters back), or null. */
+const yoy = (d: ChartData, name: string) => {
+  const now = lv(d, name);
+  const then = lvBack(d, name, perYear(d));
+  return now == null || then == null ? null : now - then;
+};
+/** How many readings in a row, ending at the latest, moved in the same direction. */
+const runOf = (d: ChartData, name: string, dir: "down" | "up") => {
+  const vals = (seriesByName(d, name)?.values ?? []).filter((v): v is number => v != null);
+  let n = 0;
+  for (let i = vals.length - 1; i > 0; i--) {
+    if (dir === "down" ? vals[i] < vals[i - 1] : vals[i] > vals[i - 1]) n++;
+    else break;
+  }
+  return n;
+};
+/** Highest reading in the trailing year, with its period label. */
+const yearHigh = (d: ChartData, name: string) => {
+  const vals = seriesByName(d, name)?.values ?? [];
+  let bi = -1;
+  for (let i = Math.max(0, vals.length - perYear(d)); i < vals.length; i++) {
+    const v = vals[i];
+    if (v != null && (bi < 0 || v > vals[bi]!)) bi = i;
+  }
+  return bi < 0 ? { v: null, at: "–" } : { v: vals[bi]!, at: d.periods[bi] };
+};
+const isRecord = (d: ChartData, name: string) => {
+  const v = lv(d, name);
+  return v != null && v >= peak(d, name) - 1e-9;
+};
+const andList = (xs: string[]) =>
+  xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} & ${xs[xs.length - 1]}`;
+
 /** Value of `name` at a specific period label, or null if absent. */
 const at = (d: ChartData, name: string, period: string) => {
   const i = d.periods.indexOf(period);
@@ -136,26 +165,60 @@ const HH_INCUMBENTS = [
 // trend clause are derived from the datasets so the takeaway can never drift out
 // of sync with the chart when the workbook is regenerated.
 function buildVerdicts(): {
-  npl: Verdict; early: Verdict; peer: Verdict; household: Verdict; rate: Verdict; cor: Verdict;
+  npl: Verdict; early: Verdict; payroll: Verdict; payrollEarly: Verdict;
+  peer: Verdict; household: Verdict; rate: Verdict; cor: Verdict;
   earlyPeer: Verdict; npl15d: Verdict; stage3: Verdict; writeOffs: Verdict;
 } {
+  // --- System NPL by product (BCB, monthly). "Record" means the worst reading
+  // since the series starts, which the copy names rather than assumes.
+  const PRODUCTS = [
+    { key: "Credit card loans", label: "card", short: "card", noun: "cards" },
+    { key: "Personal loans", label: "personal-loan", short: "personal", noun: "personal loans" },
+    { key: "Payroll loans", label: "payroll", short: "payroll", noun: "payroll" },
+    { key: "All household loans", label: "household", short: "household", noun: "household credit" },
+  ];
+  const since = systemNpl.periods[0];
+  const nplAt = lp(systemNpl, "Credit card loans");
   const card = lv(systemNpl, "Credit card loans")!;
   const pers = lv(systemNpl, "Personal loans")!;
   const pay = lv(systemNpl, "Payroll loans")!;
+  const records = PRODUCTS.filter((p) => isRecord(systemNpl, p.key)).map((p) => p.label);
+  const yoyTxt = (d: ChartData, name: string) => {
+    const x = yoy(d, name);
+    return x == null ? "" : `, ${signed(x)}pp on a year ago`;
+  };
+  const payYoY = yoy(systemNpl, "Payroll loans");
 
-  const carde = lv(systemEarlyNpl, "Credit card loans")!;
-  const cardePrev = lvBack(systemEarlyNpl, "Credit card loans", 1);
-  const perse = lv(systemEarlyNpl, "Personal loans")!;
-  const hhe = lv(systemEarlyNpl, "Household loans")!;
+  // --- System early NPL: which products run hottest, and is the gauge still rising?
   const earlyAt = lp(systemEarlyNpl, "Credit card loans");
-  const cardeMove =
-    cardePrev == null
-      ? "is the latest reading"
-      : carde > cardePrev
-        ? `ticked back up in ${earlyAt}`
-        : carde < cardePrev
-          ? `eased in ${earlyAt}`
-          : `was flat in ${earlyAt}`;
+  const earlyRanked = PRODUCTS
+    .map((p) => ({ ...p, v: lv(systemEarlyNpl, p.key) }))
+    .filter((p): p is typeof p & { v: number } => p.v != null)
+    .sort((a, b) => b.v - a.v);
+  const perse = lv(systemEarlyNpl, "Personal loans")!;
+  const perseYoY = yoy(systemEarlyNpl, "Personal loans");
+  const perseHigh = yearHigh(systemEarlyNpl, "Personal loans");
+  const perseEasing = runOf(systemEarlyNpl, "Personal loans", "down");
+  const carde = lv(systemEarlyNpl, "Credit card loans")!;
+  const cardeYoY = yoy(systemEarlyNpl, "Credit card loans");
+  const perseState =
+    perseYoY != null && perseYoY <= 0
+      ? `already below a year ago (${signed(perseYoY)}pp) — the gauge has turned`
+      : perseEasing >= 2 && perseHigh.v != null
+        ? `${perseYoY == null ? "" : `still ${signed(perseYoY)}pp on a year ago, but `}off their ${perseHigh.at} high (${fmt(perseHigh.v)}) for ${steps(systemEarlyNpl, perseEasing)} running`
+        : `still climbing${perseYoY == null ? "" : ` (${signed(perseYoY)}pp on a year ago)`}`;
+
+  // --- Payroll by borrower: the "safe" product is really three products.
+  const priv = lv(payrollNpl, "Private-sector payroll")!;
+  const pub = lv(payrollNpl, "Public-sector payroll")!;
+  const inss = lv(payrollNpl, "INSS payroll")!;
+  const privYoY = yoy(payrollNpl, "Private-sector payroll");
+  const privAt = lp(payrollNpl, "Private-sector payroll");
+  const privE = lv(payrollEarlyNpl, "Private-sector payroll")!;
+  const privEYoY = yoy(payrollEarlyNpl, "Private-sector payroll");
+  const privEHigh = yearHigh(payrollEarlyNpl, "Private-sector payroll");
+  const privEAgo = lvBack(payrollEarlyNpl, "Private-sector payroll", perYear(payrollEarlyNpl));
+  const privECresting = privEHigh.v != null && privE < privEHigh.v - 0.25;
 
   // --- Peer NPL (whole bank). Nu is now in the workbook, so the chart can
   // finally answer with Nu itself rather than using Inter as a stand-in.
@@ -238,12 +301,26 @@ function buildVerdicts(): {
 
   return {
     npl: {
-      answer: `Card & personal-loan NPLs are at cycle highs; payroll is ${(card / pay).toFixed(1)}× cleaner — but no longer improving.`,
-      detail: `Credit-card (${fmt(card)}${card >= peak(systemNpl, "Credit card loans") - 1e-9 ? ", a record" : ""}) and personal-loan (${fmt(pers)}${pers >= peak(systemNpl, "Personal loans") - 1e-9 ? ", a record" : ""}) delinquencies have re-accelerated since 2022. Payroll, the secured product, sits at ${fmt(pay)} — still a ~${Math.round(card - pay)}pp gap to unsecured stress, though it is ${rising(systemNpl, "Payroll loans") ? "drifting up too" : "no longer falling"}.`,
+      answer: records.length
+        ? `${andList(records).replace(/^./, (c) => c.toUpperCase())} NPL${records.length > 1 ? "s are" : " is"} at the worst level since ${since}; payroll is still ${(card / pay).toFixed(1)}× cleaner than cards.`
+        : `Card & personal-loan NPLs sit below their peaks; payroll is ${(card / pay).toFixed(1)}× cleaner than cards.`,
+      detail: `${nplAt}: credit cards ${fmt(card)}${yoyTxt(systemNpl, "Credit card loans")}; personal loans ${fmt(pers)}${yoyTxt(systemNpl, "Personal loans")}. Payroll, the secured product, sits at ${fmt(pay)} — still a ~${Math.round(card - pay)}pp gap to card stress, though it is ${payYoY != null && payYoY > 0 ? "rising too" : "not rising"}; the borrower split below shows where.`,
     },
     early: {
-      answer: "Leading indicator — early arrears run hottest in household & personal loans.",
-      detail: `Household (${fmt(hhe)}) and personal-loan (${fmt(perse)}) early NPLs lead and are ${rising(systemEarlyNpl, "Personal loans") ? "still climbing" : "off their highs"} — the advance signal for where 90-day NPLs go next; card early NPL (${fmt(carde)}) ${cardeMove}.`,
+      answer: `Leading indicator — early arrears run hottest in ${earlyRanked[0]?.noun} & ${earlyRanked[1]?.noun}.`,
+      detail: `${earlyAt}: ${earlyRanked.map((p) => `${p.short} ${fmt(p.v)}`).join(" · ")}. These are loans 15–90 days late — the pipeline into the 90-day ratio above. Personal-loan early arrears (${fmt(perse)}) are ${perseState}; card (${fmt(carde)}) is ${cardeYoY == null ? "the latest reading" : `${signed(cardeYoY)}pp on a year ago`}.`,
+    },
+    payroll: {
+      answer: priv > card
+        ? `"Safe" payroll isn't one product — private-sector payroll now defaults more than credit cards (${fmt(priv)} vs ${fmt(card)}).`
+        : `"Safe" payroll isn't one product — private-sector payroll defaults ${(priv / inss).toFixed(1)}× INSS payroll.`,
+      detail: `${privAt}: private-sector workers ${fmt(priv)}${privYoY == null ? "" : ` (${signed(privYoY)}pp in a year${isRecord(payrollNpl, "Private-sector payroll") ? `, the worst since ${payrollNpl.periods[0]}` : ""})`}, public employees ${fmt(pub)}, INSS retirees & pensioners ${fmt(inss)}. The all-payroll ${fmt(pay)} averages them together. A private-sector deduction lasts only as long as the job; a public salary or an INSS pension rarely stops.`,
+    },
+    payrollEarly: {
+      answer: privECresting
+        ? `Private-sector payroll arrears may be cresting — but from ${privEAgo ? `${(privE / privEAgo).toFixed(1)}× last year's level` : "a high level"}.`
+        : `Private-sector payroll arrears are still building${privEYoY == null ? "" : ` — ${signed(privEYoY)}pp in a year`}.`,
+      detail: `Early (15–90 day) arrears, ${lp(payrollEarlyNpl, "Private-sector payroll")}: private-sector ${fmt(privE)}${privEAgo == null ? "" : ` vs ${fmt(privEAgo)} a year earlier`}${privECresting ? `, down from ${fmt(privEHigh.v)} in ${privEHigh.at}` : ""}; public-sector ${fmt(lv(payrollEarlyNpl, "Public-sector payroll"))} and INSS ${fmt(lv(payrollEarlyNpl, "INSS payroll"))}. Whatever is in this pipeline and isn't cured reaches the 90-day chart above within three months.`,
     },
     peer: {
       answer: nuAbove
@@ -295,6 +372,9 @@ function buildVerdicts(): {
 }
 
 const VERDICTS = buildVerdicts();
+
+/** 180+ monthly readings make the grouped-bar view unreadable, so those charts offer trend + table. */
+const MONTHLY_VIEWS: ("trend" | "table")[] = ["trend", "table"];
 
 function SectionLabel({ title, hint }: { title: string; hint: string }) {
   return (
@@ -426,6 +506,7 @@ export function Dashboard() {
         nuStage3: latest(seriesByName(peerStage3, "Nu")!.values),
         nuWriteOffs: latest(seriesByName(peerWriteOffs, "Nu")!.values),
         systemCardNpl: latest(seriesByName(systemNpl, "Credit card loans")!.values),
+        systemPrivatePayrollNpl: latest(seriesByName(payrollNpl, "Private-sector payroll")!.values),
       },
       insights: INSIGHTS.map((i) => ({
         id: i.id, kind: i.kind, title: i.title, stat: i.stat.value, takeaway: i.takeaway,
@@ -561,20 +642,44 @@ export function Dashboard() {
           <TrendChart
             data={systemNpl}
             title="System NPL by product"
-            subtitle="Macro credit cycle — 90-day NPL ratio by loan product"
+            subtitle="Macro credit cycle — 90-day NPL ratio by loan product (BCB, monthly)"
             category="analytics"
             verdict={VERDICTS.npl}
             span={2}
             chartHeight={244}
+            views={MONTHLY_VIEWS}
           />
           <TrendChart
             data={systemEarlyNpl}
             title="System early NPL by product"
-            subtitle="Leading indicator — 15-to-90-day arrears by loan product"
+            subtitle="Leading indicator — 15-to-90-day arrears by loan product (BCB, monthly)"
             category="analytics"
             verdict={VERDICTS.early}
             span={2}
             chartHeight={244}
+            views={MONTHLY_VIEWS}
+          />
+          <TrendChart
+            data={payrollNpl}
+            title="Payroll NPL by borrower"
+            subtitle="Private-sector workers vs public employees vs INSS retirees — 90-day NPL (BCB, monthly)"
+            category="analytics"
+            verdict={VERDICTS.payroll}
+            highlight="Private-sector payroll"
+            span={2}
+            chartHeight={244}
+            views={MONTHLY_VIEWS}
+          />
+          <TrendChart
+            data={payrollEarlyNpl}
+            title="Payroll early NPL by borrower"
+            subtitle="15-to-90-day arrears — the pipeline into the chart above (BCB, monthly)"
+            category="analytics"
+            verdict={VERDICTS.payrollEarly}
+            highlight="Private-sector payroll"
+            span={2}
+            chartHeight={244}
+            views={MONTHLY_VIEWS}
           />
           <TrendChart
             data={peerNpl}

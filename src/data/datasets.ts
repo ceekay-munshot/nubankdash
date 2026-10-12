@@ -9,10 +9,11 @@
 //    the workbook is missing one issuer's volume, that issuer's own share is
 //    null and the denominator is repaired by interpolation, so the issuers that
 //    DID report keep their true share (see scratchpad/parse.py).
-//  - Asset-quality series are the published system / peer NPL ratios (%),
-//    plus four more per-bank credit-risk views (early NPL, NPL over 15 days,
-//    Stage 3, write-offs) that each answer "whose loans are in trouble?" a
-//    different way - see AQ_BLOCKS in parse.py for what each one measures.
+//  - Asset-quality series are the published peer NPL ratios (%), plus four
+//    more per-bank credit-risk views (early NPL, NPL over 15 days, Stage 3,
+//    write-offs) that each answer "whose loans are in trouble?" a different
+//    way - see AQ_BLOCKS in parse.py for what each one measures. System NPL by
+//    product comes monthly from the BCB credit workbook instead (bcb.ts).
 //  - Rates are the BCB weekly personal-loan (non-payroll, pre-fixed) rate,
 //    % a.a., averaged over each calendar quarter.
 // Nu is the sum of its two Brazilian legal entities across every loan section.
@@ -115,26 +116,6 @@ export const payrollShare: ChartData = {
     { name: "Caixa", values: [21.81, 22.2, 20.68, 17.71, 16.25, 15.92, 16.18, 17.36, 17.05, 16.82, 16.59, 16.49, 15.89, 15.4, 15.16, 15.14, 14.76, 14.91, 14.86, 14.73, 14.41] },
     { name: "BB", values: [22.95, 21.77, 21.62, 21.06, 21.17, 21.22, 20.71, 19.51, 19.61, 19.87, 19.87, 20.2, 20.32, 20.34, 20.58, 20.69, 19.8, 19.97, 19.55, 19.2, 19.33] },
     { name: "Inter", values: [null, null, 0.22, 0.21, 0.24, 0.35, 0.67, 0.76, 0.77, 0.77, 0.74, 0.72, 0.68, 0.66, 0.66, 0.66, 0.66, 0.76, 0.83, 0.93, 0.97] },
-  ],
-};
-
-export const systemNpl: ChartData = {
-  periods: ["1Q16", "2Q16", "3Q16", "4Q16", "1Q17", "2Q17", "3Q17", "4Q17", "1Q18", "2Q18", "3Q18", "4Q18", "1Q19", "2Q19", "3Q19", "4Q19", "1Q20", "2Q20", "3Q20", "4Q20", "1Q21", "2Q21", "3Q21", "4Q21", "1Q22", "2Q22", "3Q22", "4Q22", "1Q23", "2Q23", "3Q23", "4Q23", "1Q24", "2Q24", "3Q24", "4Q24", "1Q25", "2Q25", "3Q25", "4Q25", "1Q26", "2Q26"],
-  series: [
-    { name: "Credit card loans", values: [8.0, 8.3, 8.2, 7.7, 7.4, 7.4, 7.0, 6.1, 5.9, 5.9, 6.0, 5.5, 5.7, 5.6, 6.2, 6.0, 6.6, 7.5, 6.2, 4.4, 3.9, 3.9, 4.6, 5.0, 5.8, 6.6, 7.6, 7.9, 8.5, 8.6, 8.3, 7.4, 7.3, 7.5, 7.5, 6.8, 7.8, 8.5, 9.1, 8.9, 9.1, 9.6] },
-    { name: "Personal loans", values: [10.1, 9.6, 10.0, 9.2, 8.7, 8.2, 8.3, 7.9, 7.8, 7.6, 7.5, 7.4, 7.4, 7.8, 7.9, 8.1, 8.4, 7.9, 6.1, 5.4, 5.3, 5.2, 5.1, 5.2, 6.0, 6.9, 7.7, 8.1, 8.1, 8.1, 7.3, 6.7, 6.4, 6.5, 6.5, 6.5, 7.3, 8.2, 8.8, 9.2, 9.7, 10.6] },
-    { name: "Payroll loans", values: [2.3, 2.2, 2.3, 2.3, 2.3, 2.3, 2.4, 2.4, 2.4, 2.3, 2.3, 2.3, 2.2, 2.2, 2.2, 2.3, 2.3, 2.3, 2.8, 2.8, 2.6, 2.6, 2.7, 2.6, 2.6, 2.4, 2.2, 2.2, 2.1, 2.3, 2.2, 2.3, 2.2, 2.2, 2.4, 2.3, 2.3, 2.4, 2.5, 2.8, 2.9, 3.2] },
-    { name: "Household loans", values: [6.2, 6.2, 6.2, 6.0, 5.9, 5.7, 5.6, 5.2, 5.1, 4.9, 4.9, 4.8, 4.7, 4.8, 5.0, 5.0, 5.2, 5.3, 4.6, 4.2, 4.0, 4.0, 4.2, 4.4, 4.8, 5.2, 5.7, 5.9, 6.1, 6.3, 5.9, 5.6, 5.4, 5.4, 5.6, 5.2, 5.7, 6.5, 6.9, 7.1, 7.2, 7.6] },
-  ],
-};
-
-export const systemEarlyNpl: ChartData = {
-  periods: ["1Q16", "2Q16", "3Q16", "4Q16", "1Q17", "2Q17", "3Q17", "4Q17", "1Q18", "2Q18", "3Q18", "4Q18", "1Q19", "2Q19", "3Q19", "4Q19", "1Q20", "2Q20", "3Q20", "4Q20", "1Q21", "2Q21", "3Q21", "4Q21", "1Q22", "2Q22", "3Q22", "4Q22", "1Q23", "2Q23", "3Q23", "4Q23", "1Q24", "2Q24", "3Q24", "4Q24", "1Q25", "2Q25", "3Q25", "4Q25", "1Q26", "2Q26"],
-  series: [
-    { name: "Credit card loans", values: [4.2, 4.0, 3.9, 3.3, 3.8, 3.3, 3.0, 2.7, 3.4, 3.2, 2.8, 2.5, 3.2, 3.1, 3.0, 2.6, 3.6, 3.0, 2.0, 1.6, 2.5, 2.5, 2.7, 3.0, 3.7, 3.5, 3.8, 3.5, 3.8, 3.4, 3.1, 3.0, 3.4, 3.0, 2.9, 2.7, 3.2, 3.0, 2.9, 2.6, 3.2, 3.1] },
-    { name: "Personal loans", values: [7.7, 7.5, 7.5, 6.6, 7.5, 7.1, 6.7, 6.5, 6.9, 6.5, 6.1, 5.8, 6.5, 6.3, 6.2, 5.9, 6.6, 4.1, 4.5, 4.0, 4.7, 4.2, 4.4, 4.5, 5.3, 5.1, 5.1, 5.1, 5.4, 4.9, 4.6, 4.5, 4.7, 4.5, 4.4, 4.4, 5.1, 4.8, 5.0, 5.2, 5.4, 5.6] },
-    { name: "Payroll loans", values: [3.3, 2.7, 3.4, 2.7, 2.6, 2.4, 2.4, 3.0, 3.0, 3.2, 3.4, 3.3, 3.9, 3.7, 3.8, 3.8, 2.6, 3.5, 3.1, 2.2, 2.5, 2.3, 2.2, 2.0, 2.2, 2.1, 1.8, 1.9, 2.2, 2.0, 2.1, 2.1, 2.2, 2.0, 2.2, 2.5, 2.4, 2.2, 2.4, 2.4, 2.8, 3.0] },
-    { name: "Household loans", values: [5.9, 5.5, 5.8, 4.9, 5.3, 5.0, 4.6, 4.6, 5.0, 5.0, 4.7, 4.4, 5.2, 5.1, 4.9, 4.7, 5.0, 4.1, 3.9, 3.4, 4.1, 3.8, 3.9, 4.0, 4.7, 4.5, 4.5, 4.4, 4.8, 4.5, 4.3, 4.2, 4.5, 4.1, 4.1, 4.0, 4.4, 4.2, 4.2, 4.1, 4.5, 4.6] },
   ],
 };
 

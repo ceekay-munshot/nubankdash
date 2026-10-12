@@ -14,7 +14,9 @@ Method (unchanged from the original generation, see README "Data"):
   * Loan market share = entity balance / the sheet's own Total row (IF.data's
     independent system total, never a sum of the listed banks).
   * TPV share       = issuer card TPV / the sum of the 8 tracked issuers.
-  * Asset-quality   = the published ratios, x100.
+  * Asset-quality   = the published peer ratios, x100. System NPL by product
+    is NOT read from this workbook any more: it comes monthly from the BCB
+    credit workbook via scratchpad/parse_bcb.py (src/data/bcb.ts).
   * Interest rates  = BCB weekly "crédito pessoal não-consignado - pré-fixado"
     rates (% a.a.), averaged into calendar quarters.
 
@@ -82,13 +84,14 @@ SPIKES = {
 }
 
 # Asset quality sheet: block label -> (header row for periods, {series: row}).
-# NB the period header on the System blocks is itself typo'd (3Q23 keyed as
-# 4Q23), so every block reuses the canonical header in row 4.
+# Every block reuses the canonical period header in row 4.
+# The sheet's System NPL / early-NPL blocks (rows 33-42) are deliberately not
+# read: they are the same BCB series sampled at quarter ends, and the dashboard
+# takes them monthly from the BCB credit workbook instead (parse_bcb.py) - two
+# copies of one series would drift apart between editions.
 AQ_PERIOD_ROW = 4
 AQ_BLOCKS = {
     "peerNpl": [("Itaú", 6), ("Santander Brasil", 7), ("Bradesco", 5), ("Inter", 8), ("Nu", 9)],
-    "systemNpl": [("Credit card loans", 33), ("Personal loans", 34), ("Payroll loans", 35), ("Household loans", 36)],
-    "systemEarlyNpl": [("Credit card loans", 39), ("Personal loans", 40), ("Payroll loans", 41), ("Household loans", 42)],
     # Annualised credit-loss provisions / loans, i.e. what the risk actually
     # costs each bank per year - the only series here that is directly
     # comparable with an interest rate.
@@ -97,7 +100,8 @@ AQ_BLOCKS = {
     # are in trouble?"), each measuring it differently. All checked for
     # plausibility against neighbouring quarters before wiring - none flagged.
     #   - Early NPL (peer): the leading-indicator version of peerNpl, by BANK
-    #     rather than by product (systemEarlyNpl is by product, system-wide).
+    #     rather than by product (the BCB workbook's systemEarlyNpl is by
+    #     product, system-wide).
     "peerEarlyNpl": [("Itaú", 20), ("Santander Brasil", 21), ("Bradesco", 19), ("Inter", 22), ("Nu", 23)],
     #   - NPL over 15 days: a wider net than the 90-day peerNpl ratio, so it
     #     reads structurally higher for every bank - the interesting read is
@@ -133,8 +137,8 @@ MIN_WEEKS_PER_QUARTER = 6
 def workbook_edition(path):
     """The workbook's edition stamp, e.g. "08.24.2026".
 
-    The analyst names each edition `<date>__Nu_Brazil.xlsx`, so the filename is
-    the primary source; a workbook renamed on the way here falls back to the
+    The analyst names each edition `<date>__Nu_Brazil.xlsx` (and the BCB file
+    `<date> - Bz Central Bank data.xlsx`), so the filename is the primary source; a workbook renamed on the way here falls back to the
     document's own last-modified date. Never hardcode this: the whole point of a
     one-command refresh is that the next edition re-stamps itself.
     """
@@ -444,10 +448,11 @@ HEADER_DATASETS = '''// AUTO-GENERATED from the Nu Brazil workbook ({edition}).
 //    the workbook is missing one issuer's volume, that issuer's own share is
 //    null and the denominator is repaired by interpolation, so the issuers that
 //    DID report keep their true share (see scratchpad/parse.py).
-//  - Asset-quality series are the published system / peer NPL ratios (%),
-//    plus four more per-bank credit-risk views (early NPL, NPL over 15 days,
-//    Stage 3, write-offs) that each answer "whose loans are in trouble?" a
-//    different way - see AQ_BLOCKS in parse.py for what each one measures.
+//  - Asset-quality series are the published peer NPL ratios (%), plus four
+//    more per-bank credit-risk views (early NPL, NPL over 15 days, Stage 3,
+//    write-offs) that each answer "whose loans are in trouble?" a different
+//    way - see AQ_BLOCKS in parse.py for what each one measures. System NPL by
+//    product comes monthly from the BCB credit workbook instead (bcb.ts).
 //  - Rates are the BCB weekly personal-loan (non-payroll, pre-fixed) rate,
 //    % a.a., averaged over each calendar quarter.
 // Nu is the sum of its two Brazilian legal entities across every loan section.
@@ -532,6 +537,9 @@ def main():
         sys.exit(__doc__)
     check = "--check" in sys.argv
     wb = openpyxl.load_workbook(args[0], data_only=True)
+    if "Loans" not in wb.sheetnames and any(n.strip() == "NPL" for n in wb.sheetnames):
+        sys.exit("This looks like the BCB credit-data workbook (NPL / Early NPL sheets).\n"
+                 "Regenerate it with:  python3 scratchpad/parse_bcb.py <workbook.xlsx>")
 
     report: list = []
     loans = read_loans(wb, report)
@@ -567,8 +575,6 @@ def main():
     ds.append(tpv_holes_ts(holes, set(tpv["periods"])))
     ds.append(chart("unsecuredShare", loan_shares(loans["unsecured"]), SHARE_ORDER))
     ds.append(chart("payrollShare", loan_shares(loans["payroll"]), SHARE_ORDER))
-    ds.append(chart("systemNpl", aq["systemNpl"], [n for n, _ in AQ_BLOCKS["systemNpl"]]))
-    ds.append(chart("systemEarlyNpl", aq["systemEarlyNpl"], [n for n, _ in AQ_BLOCKS["systemEarlyNpl"]]))
     ds.append(chart("peerNpl", aq["peerNpl"], [n for n, _ in AQ_BLOCKS["peerNpl"]]))
     ds.append(chart("costOfRisk", aq["costOfRisk"], [n for n, _ in AQ_BLOCKS["costOfRisk"]]))
     ds.append(chart("peerEarlyNpl", aq["peerEarlyNpl"], [n for n, _ in AQ_BLOCKS["peerEarlyNpl"]]))

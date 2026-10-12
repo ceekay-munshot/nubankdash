@@ -1,7 +1,7 @@
 // src/components/charts/TrendChart.tsx
 //
 // Answer-oriented time-series chart, used by the asset-quality and pricing
-// sections (any % series over quarters works). The question
+// sections (any % series over quarters or months works). The question
 // each card asks (e.g. "is Inter taking worse credit risk than incumbents?") is
 // a change-over-time comparison, so the default view is LINES, not grouped bars:
 // lines let the eye trace one entity across ~40 quarters and read cross-overs at
@@ -11,7 +11,7 @@
 //      so a hero line breaking above it literally *is* the answer;
 //   3. a computed verdict strip that states the takeaway in one line.
 // A Bars view (the old grouped-bar rendering) and a Table view remain available.
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Area, Bar, BarChart, CartesianGrid, Customized, ComposedChart, Line,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -31,7 +31,10 @@ const SHORT: Record<string, string> = {
   "Credit card loans": "Card",
   "Personal loans": "Personal",
   "Payroll loans": "Payroll",
-  "Household loans": "Household",
+  "All household loans": "Household",
+  "Private-sector payroll": "Private",
+  "Public-sector payroll": "Public",
+  "INSS payroll": "INSS",
   "Santander Brasil": "Santander",
 };
 const shortLabel = (name: string) => SHORT[name] ?? name;
@@ -48,6 +51,7 @@ export function TrendChart({
   chartHeight = 240,
   decimals = 1,
   yUnit = "%",
+  views = ["trend", "bars", "table"],
 }: {
   data: ChartData;
   title: string;
@@ -64,9 +68,21 @@ export function TrendChart({
   decimals?: number;
   /** Axis/tooltip suffix; "%" for every series on this dashboard. */
   yUnit?: string;
+  /** View toggle options. Long monthly series drop "bars": 180+ grouped bars are unreadable. */
+  views?: View[];
 }) {
   const [view, setView] = useState<View>("trend");
   const rows = toRows(data);
+  const bodyHeight = chartHeight + (verdict ? 132 : 64);
+
+  // The table view keeps the chart's footprint and scrolls, opening on the
+  // newest readings — 180+ monthly rows would otherwise stretch the card to
+  // several thousand pixels.
+  const tableRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const scroller = tableRef.current?.firstElementChild as HTMLElement | null;
+    if (view === "table" && scroller) scroller.scrollTop = scroller.scrollHeight;
+  }, [view]);
 
   // Attach the reference-group envelope [low, high] to each row for the band.
   if (band) {
@@ -90,11 +106,13 @@ export function TrendChart({
       subtitle={subtitle}
       category={category}
       span={span}
-      actions={<ViewToggle<View> view={view} onChange={setView} options={["trend", "bars", "table"]} />}
-      bodyMinHeight={chartHeight + (verdict ? 132 : 64)}
+      actions={<ViewToggle<View> view={view} onChange={setView} options={views} />}
+      bodyMinHeight={bodyHeight}
     >
       {view === "table" ? (
-        <DataTable data={data} decimals={decimals} />
+        <div ref={tableRef} style={{ height: bodyHeight }}>
+          <DataTable data={data} decimals={decimals} />
+        </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
           {verdict && <VerdictStrip {...verdict} />}

@@ -1,7 +1,8 @@
 // src/insights/engine.ts
 //
 // The insight engine. Every insight below is COMPUTED at module load from the
-// bundled workbook series (src/data/datasets.ts + src/data/absolutes.ts), and
+// bundled workbook series (src/data/datasets.ts + absolutes.ts from the
+// Nu_Brazil workbook, src/data/bcb.ts from the BCB credit workbook), and
 // each one carries its own step-by-step calculation trail built from the very
 // same intermediate values that are displayed — so what you read on a card and
 // what you see in the "how we got this" modal can never diverge.
@@ -10,15 +11,19 @@
 //  - No number is hardcoded; everything derives from the datasets.
 //  - Every step's `math` string shows the real inputs, not placeholders.
 //  - If the data can't support a claim, the insight states the honest version
-//    (e.g. early NPL is a COINCIDENT gauge for personal loans — we measured
-//    the lead-lag and report the measured correlations, not folklore).
+//    (e.g. how far early NPL leads headline NPL is measured from the data and
+//    reported with its correlations, not assumed from folklore).
+//  - Never assume a frequency: the system NPL series are MONTHLY (BCB workbook)
+//    while the bank series are quarterly, so "a year back" is perYear(d) steps.
 
 import {
   creditCardShare, tpvShare, unsecuredShare, payrollShare,
-  systemNpl, systemEarlyNpl, peerNpl, householdNpl, personalLoanRate, costOfRisk,
+  peerNpl, householdNpl, personalLoanRate, costOfRisk,
   type ChartData,
 } from "../data/datasets";
+import { systemNpl, systemEarlyNpl, payrollNpl, payrollEarlyNpl } from "../data/bcb";
 import { loanAbsCreditCard, loanAbsUnsecured, loanAbsPayroll } from "../data/absolutes";
+import { isMonthly, perYear, seasonOf, stepName, steps as nSteps } from "../lib/periods";
 import type { CalcStep, Insight } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -64,12 +69,18 @@ function back(d: ChartData, name: string, k: number): { period: string; value: n
   return { period: d.periods[i], value: v };
 }
 
+/** The same reading one year earlier (12 months or 4 quarters back, per the data). */
+function yearAgo(d: ChartData, name: string): { period: string; value: number } {
+  return back(d, name, perYear(d));
+}
+
 /**
- * The most recent trough: the lowest reading in the trailing `window` periods.
- * Used instead of a hardcoded "the cycle bottomed in 3Q24" so the claim keeps
- * pointing at the real low as new quarters arrive.
+ * The most recent trough: the lowest reading in the trailing `window` periods
+ * (default: three years at the data's own frequency). Used instead of a
+ * hardcoded "the cycle bottomed in 3Q24" so the claim keeps pointing at the
+ * real low as new readings arrive.
  */
-function trough(d: ChartData, name: string, window = 12): { period: string; value: number } {
+function trough(d: ChartData, name: string, window = 3 * perYear(d)): { period: string; value: number } {
   const vals = ser(d, name);
   const end = lastIdx(d, name);
   let bi = -1;
@@ -107,8 +118,39 @@ function panel(d: ChartData, anchor: string, names: string[]) {
   return { period: d.periods[i], rows, missing, mean, of };
 }
 
-/** "1Q26" -> "1Q"; used to compare a quarter with the same quarter of other years. */
-const quarterOf = (period: string) => (/^\dQ/.test(period) ? period.slice(0, 2) : "");
+/** Highest reading in the trailing year (latest included), with its period. */
+function yearHigh(d: ChartData, name: string): { period: string; value: number } {
+  const vals = ser(d, name);
+  const end = lastIdx(d, name);
+  let bi = -1;
+  for (let i = Math.max(0, end - perYear(d) + 1); i <= end; i++) {
+    const v = vals[i];
+    if (v !== null && v !== undefined && (bi < 0 || v > vals[bi]!)) bi = i;
+  }
+  return { period: d.periods[bi], value: vals[bi]! };
+}
+
+/** How many readings in a row, ending at the latest, moved in direction `dir`. */
+function runAtEnd(d: ChartData, name: string, dir: "up" | "down"): number {
+  const vals = ser(d, name).filter((v): v is number => v !== null && v !== undefined);
+  let n = 0;
+  for (let i = vals.length - 1; i > 0; i--) {
+    if (dir === "up" ? vals[i] > vals[i - 1] : vals[i] < vals[i - 1]) n++;
+    else break;
+  }
+  return n;
+}
+
+/** `name`'s values re-indexed onto `periods` (null where `d` has no such period). */
+function alignTo(d: ChartData, name: string, periods: string[]): (number | null)[] {
+  const vals = ser(d, name);
+  return periods.map((p) => {
+    const i = d.periods.indexOf(p);
+    return i >= 0 ? vals[i] : null;
+  });
+}
+
+const maxOf = (vals: (number | null)[]) => Math.max(...vals.filter((v): v is number => v !== null));
 
 const f = (x: number, dp = 1) => x.toFixed(dp);
 const signed = (x: number, dp = 1) => `${x >= 0 ? "+" : ""}${x.toFixed(dp)}`;
@@ -144,6 +186,7 @@ const SHEETS = {
   aq: "Asset quality sheet (NPL ratios, %)",
   hh: "Asset Quality (household) sheet (household-book NPL, %)",
   rates: "Personal Loans - Interest rates sheet (BCB weekly, % a.a.)",
+  bcb: "BCB credit data workbook (NPL & Early NPL sheets, monthly %)",
 };
 
 // ---------------------------------------------------------------------------
@@ -291,63 +334,82 @@ function insightShrinkingMarketGrab(): Insight {
 // C. Record card NPL is stock, not flow
 // ---------------------------------------------------------------------------
 function insightStockNotFlow(): Insight {
-  const npl = ser(systemNpl, "Credit card loans");
-  const enpl = ser(systemEarlyNpl, "Credit card loans");
+  const NAME = "Credit card loans";
   const periods = systemNpl.periods;
-  const cur = last(systemNpl, "Credit card loans");
-  const curE = last(systemEarlyNpl, "Credit card loans");
-  const maxNpl = Math.max(...npl.filter((v): v is number => v !== null));
+  const npl = ser(systemNpl, NAME);
+  const enpl = alignTo(systemEarlyNpl, NAME, periods);
+  const cur = last(systemNpl, NAME);
+  const curE = last(systemEarlyNpl, NAME);
+  const nplCount = npl.filter((v) => v !== null).length;
+  const maxNpl = maxOf(npl);
   const isRecord = cur.value >= maxNpl - 1e-9;
-  const eVals = enpl.filter((v): v is number => v !== null);
-  const maxE = Math.max(...eVals);
-  const rankE = eVals.slice().sort((a, b) => a - b).findIndex((v) => v >= curE.value) + 1;
-  const yAgo = back(systemEarlyNpl, "Credit card loans", 4);
-  const prev = back(systemEarlyNpl, "Credit card loans", 1);
+  const eVals = ser(systemEarlyNpl, NAME).filter((v): v is number => v !== null);
+  const maxE = maxOf(eVals);
+  // Share of the gauge's own history that sits BELOW today's reading.
+  const pctBelow = (100 * eVals.filter((v) => v < curE.value).length) / eVals.length;
+  const yAgo = yearAgo(systemEarlyNpl, NAME);
+  const prev = back(systemEarlyNpl, NAME, 1);
   const yoyE = curE.value - yAgo.value;
+  // The insight IS "new defaults aren't the problem"; if the tap is clearly
+  // running faster than a year ago, that claim is false and the card skips.
+  if (yoyE >= 0.5) throw new Error(`card early NPL ${signed(yoyE)}pp YoY — new defaults are rising`);
+  const unit = stepName(systemEarlyNpl);
+  const dp = isMonthly(curE.period) ? 2 : 1; // monthly moves are hundredths of a point
 
   // Seasonality, generalised: how much early NPL usually moves INTO this
-  // quarter-of-the-year, measured across every year in the sheet. (The old
-  // version hardcoded the January effect and broke the moment the latest
-  // reading stopped being a Q1.)
-  const qLabel = quarterOf(curE.period);
-  const curIdx = periods.indexOf(curE.period);
+  // month (or quarter) of the year, measured across every year in the sheet.
+  // (The first version hardcoded the January effect and broke the moment the
+  // latest reading stopped being a Q1.)
+  const season = seasonOf(curE.period);
+  const ePeriods = systemEarlyNpl.periods;
+  const eSer = ser(systemEarlyNpl, NAME);
+  const curIdx = ePeriods.indexOf(curE.period);
   const seasonal: number[] = [];
-  periods.forEach((pd, i) => {
-    // Skip the quarter under test: including its own move in the baseline pulls
+  ePeriods.forEach((pd, i) => {
+    // Skip the reading under test: including its own move in the baseline pulls
     // the benchmark toward the observation and can make an unusual move look
     // ordinary.
-    if (i === 0 || i === curIdx || quarterOf(pd) !== qLabel) return;
-    const a = enpl[i - 1], b = enpl[i];
+    if (i === 0 || i === curIdx || seasonOf(pd) !== season) return;
+    const a = eSer[i - 1], b = eSer[i];
     if (a !== null && b !== null) seasonal.push(b - a);
   });
   const avgSeason = seasonal.reduce((s, v) => s + v, 0) / (seasonal.length || 1);
   const thisMove = curE.value - prev.value;
+  const seasonName = isMonthly(curE.period) ? season : `a ${season} quarter`;
 
   // Nu's own product mix, for the "why this matters for Nu" line.
   const nuC = last(loanAbsCreditCard, "Nu").value;
   const nuBook = nuC + last(loanAbsUnsecured, "Nu").value + last(loanAbsPayroll, "Nu").value;
 
+  const tap = Math.abs(yoyE) < 0.25 ? "aren't rising" : yoyE > 0 ? "are only edging up" : "are falling";
+  const historyRead =
+    pctBelow >= 80
+      ? `yes — higher than ${f(pctBelow, 0)}% of its history (record ${f(maxE)}%)`
+      : pctBelow >= 50
+        ? `middling — above ${f(pctBelow, 0)}% of its history, well short of its ${f(maxE)}% record`
+        : `no — lower than most of its history (its record is ${f(maxE)}%)`;
+
   const steps: CalcStep[] = [
-    { label: "Card loans gone bad today — 'headline NPL', the water LEVEL in the tub", math: `read straight off the sheet`, result: isRecord ? `${f(cur.value)}% — the highest of all ${periods.length} quarters` : `${f(cur.value)}% vs the record ${f(maxNpl)}%`, source: `${SHEETS.aq} · System NPL · ${cur.period}` },
-    { label: "Loans JUST STARTING to miss payments — 'early NPL', the tap filling it", math: `read straight off the sheet`, result: `${f(curE.value)}%`, source: `${SHEETS.aq} · System early NPL · ${curE.period}` },
-    { label: "Is the tap flowing faster than a year ago?", math: `${f(curE.value)} (${curE.period}) vs ${f(yAgo.value)} (${yAgo.period})`, result: `${signed(yoyE)}pp — ${Math.abs(yoyE) < 0.25 ? "essentially unchanged" : yoyE > 0 ? "yes, a little" : "no"}` },
-    { label: "Is the tap high by its own history?", math: `sort all ${eVals.length} readings; today ranks #${rankE}`, result: `no — mid-pack (its record is ${f(maxE)}%)` },
-    { label: "Remove the seasonal pattern", math: `early NPL typically moves ${signed(avgSeason, 2)}pp into a ${qLabel} quarter (${seasonal.length} earlier years, this one excluded); this year ${f(prev.value)} → ${f(curE.value)} = ${signed(thisMove)}pp`, result: Math.abs(thisMove - avgSeason) < 0.25 ? "this quarter's move is the usual seasonal pattern" : `${signed(thisMove - avgSeason)}pp beyond the usual seasonal move` },
+    { label: "Card loans gone bad today — 'headline NPL', the water LEVEL in the tub", math: `read straight off the sheet`, result: isRecord ? `${f(cur.value)}% — the highest of all ${nSteps(systemNpl, nplCount)} since ${periods[0]}` : `${f(cur.value)}% vs the record ${f(maxNpl)}%`, source: `${SHEETS.bcb} · NPL · Credit card loans · ${cur.period}` },
+    { label: "Loans JUST STARTING to miss payments — 'early NPL', the tap filling it", math: `read straight off the sheet (15–90 days overdue)`, result: `${f(curE.value)}%`, source: `${SHEETS.bcb} · Early NPL · Credit card loans · ${curE.period}` },
+    { label: "Is the tap flowing faster than a year ago?", math: `${f(curE.value, dp)} (${curE.period}) vs ${f(yAgo.value, dp)} (${yAgo.period})`, result: `${signed(yoyE, dp)}pp — ${Math.abs(yoyE) < 0.25 ? "essentially unchanged" : yoyE > 0 ? "yes, a little" : "no"}` },
+    { label: "Is the tap high by its own history?", math: `sort all ${eVals.length} ${unit}ly readings; today's sits above ${f(pctBelow, 0)}% of them`, result: historyRead },
+    { label: "Remove the seasonal pattern", math: `early NPL typically moves ${signed(avgSeason, 2)}pp into ${seasonName} (${seasonal.length} earlier years, this one excluded); this year ${f(prev.value, dp)} → ${f(curE.value, dp)} = ${signed(thisMove, dp)}pp`, result: Math.abs(thisMove - avgSeason) < 0.25 ? `this ${unit}'s move is the usual seasonal pattern` : `${signed(thisMove - avgSeason, dp)}pp beyond the usual seasonal move` },
   ];
 
   return {
     id: "stock-not-flow",
     kind: "watch",
     confidence: "High",
-    title: `Card defaults at ${isRecord ? "a record" : "near-record"} ${f(cur.value)}% — but NEW defaults aren't rising`,
-    takeaway: `The scary headline — ${isRecord ? "a record" : "a near-record"} ${f(cur.value)}% of card loans gone bad — describes OLD loans still sitting on banks' books. The share of loans just starting to miss payments is ${f(curE.value)}%, ${signed(yoyE)}pp vs a year ago and unremarkable by its own history.`,
+    title: `Card defaults at ${isRecord ? "a record" : "near-record"} ${f(cur.value)}% — but NEW defaults ${tap}`,
+    takeaway: `The scary headline — ${isRecord ? "a record" : "a near-record"} ${f(cur.value)}% of card loans gone bad — describes OLD loans still sitting on banks' books. The share of loans just starting to miss payments is ${f(curE.value)}%, ${signed(yoyE)}pp vs a year ago and ${pctBelow >= 80 ? "high" : "unremarkable"} by its own history.`,
     stat: { value: `${signed(yoyE, 1)}pp`, label: "change vs a year ago in NEW card defaults — the number that describes today's borrowers" },
     detail: `Think of a bathtub: the headline default rate is the water level; new defaults are the tap. The level is at ${isRecord ? "a record" : "a near-record"}, but the tap is flowing ${Math.abs(yoyE) < 0.25 ? "no faster than" : yoyE > 0 ? "only marginally faster than" : "slower than"} last year. That means the level comes from old problem loans aging on the books (and banks writing them off slowly) — not from today's borrowers getting into trouble. For judging Nu — whose book is ~${f((100 * nuC) / nuBook, 0)}% cards — the tap matters more than the level.`,
-    sources: [SHEETS.aq],
-    formula: `compare today's rank-in-history for headline NPL vs early NPL; change vs a year ago; seasonal check = this ${qLabel} move vs the average ${qLabel} move`,
+    sources: [SHEETS.bcb],
+    formula: `compare today's rank-in-history for headline NPL vs early NPL; change vs a year ago; seasonal check = this ${season} move vs the average ${season} move`,
     steps,
     caveats: [
-      "The sheet doesn't say exactly how many days overdue counts as 'early' — if that definition changed, the comparison would break.",
+      `${isMonthly(curE.period) ? "Monthly" : "Single"} readings are noisy — the year-on-year comparison is the signal, not the latest ${unit}'s move.`,
       "Banks writing off bad loans more slowly can keep the headline high even while new defaults improve — the direction of the tap is the signal, not the level of the tub.",
     ],
     evidence: {
@@ -362,43 +424,98 @@ function insightStockNotFlow(): Insight {
 }
 
 // ---------------------------------------------------------------------------
-// D. Personal-loan cycle hasn't peaked — measured, not assumed
+// D. Personal-loan cycle — is it peaking? Measured, not assumed
 // ---------------------------------------------------------------------------
 function insightPersonalCycle(): Insight {
-  const e = ser(systemEarlyNpl, "Personal loans");
-  const h = ser(systemNpl, "Personal loans");
+  const NAME = "Personal loans";
   const periods = systemNpl.periods;
-  const curH = last(systemNpl, "Personal loans");
-  const curE = last(systemEarlyNpl, "Personal loans");
-  const low = trough(systemNpl, "Personal loans");
-  const r0 = lagCorr(e, h, 0);
-  const r1 = lagCorr(e, h, 1);
-  const r2 = lagCorr(e, h, 2);
-  // consecutive rises in early NPL
-  const ev = e.filter((v): v is number => v !== null);
-  let rises = 0;
-  for (let i = ev.length - 1; i > 0 && rises < 6; i--) { if (ev[i] > ev[i - 1]) rises++; else break; }
+  const h = ser(systemNpl, NAME);
+  const e = alignTo(systemEarlyNpl, NAME, periods);
+  const curH = last(systemNpl, NAME);
+  const curE = last(systemEarlyNpl, NAME);
+  const low = trough(systemNpl, NAME);
+  const isRecord = curH.value >= maxOf(h) - 1e-9;
+  const unit = stepName(systemNpl);
+  const dp = isMonthly(curE.period) ? 2 : 1;
+  const yoyE = curE.value - yearAgo(systemEarlyNpl, NAME).value;
+  const hi = yearHigh(systemEarlyNpl, NAME);
+  const rises = runAtEnd(systemEarlyNpl, NAME, "up");
+  const falls = runAtEnd(systemEarlyNpl, NAME, "down");
+  // Where the live gauge is in its own cycle:
+  //  rising  - at (or within 0.1pp of) its trailing-year high
+  //  easing  - has come off that high but is still above a year ago
+  //  turned  - already at or below a year ago
+  const state: "rising" | "easing" | "turned" =
+    yoyE <= 0 ? "turned" : curE.value < hi.value - 0.1 && falls >= 1 ? "easing" : "rising";
+
+  // Lead-lag, tested up to a year ahead at the data's own frequency. The
+  // quarterly workbook found the two moved together; monthly data is finer
+  // grained, so the answer is computed rather than carried over.
+  const maxK = perYear(systemNpl);
+  const corr = Array.from({ length: maxK + 1 }, (_, k) => ({ k, ...lagCorr(e, h, k) }));
+  const r0 = corr[0];
+  const best = corr.reduce((a, b) => (b.r > a.r ? b : a));
+  const stride = Math.max(1, Math.round(maxK / 4));
+  const shown = corr.filter((c) => c.k % stride === 0 || c.k === best.k);
+  const leadText =
+    best.k === 0
+      ? `tightest with NO shift — they move together in the same ${unit}`
+      : `tightest ${nSteps(systemNpl, best.k)} ahead — the gauge leads, ${best.r - r0.r >= 0.05 ? "clearly" : "but only modestly"} (${f(best.r, 2)} vs ${f(r0.r, 2)} with no shift)`;
+  const leadSentence =
+    best.k === 0
+      ? `In this data the two move together in the same ${unit}, so the gauge reads the cycle rather than forecasting it.`
+      : `In this data the gauge runs about ${nSteps(systemNpl, best.k)} ahead of the headline, so the headline can keep climbing for a while after the gauge turns.`;
+
+  const recent = ser(systemEarlyNpl, NAME).filter((v): v is number => v !== null).slice(-6);
+  const gaugeResult = {
+    rising: `${f(curE.value, dp)}% — still climbing (${rises} rise${rises === 1 ? "" : "s"} in a row)`,
+    easing: `${f(curE.value, dp)}% — off its ${hi.period} high of ${f(hi.value, dp)}% for ${nSteps(systemEarlyNpl, falls)}, still ${signed(yoyE)}pp on a year ago`,
+    turned: `${f(curE.value, dp)}% — ${signed(yoyE)}pp vs a year ago: the gauge has turned`,
+  }[state];
+  const together = {
+    rising: { math: "live gauge still rising + it moves with or ahead of the headline", result: "no sign the default cycle has peaked" },
+    easing: { math: `live gauge off its high for ${nSteps(systemEarlyNpl, falls)} + still above a year ago`, result: "the first hint of a turn — not yet a confirmed peak" },
+    turned: { math: "live gauge below a year ago", result: "the gauge has peaked; the headline should follow" },
+  }[state];
+  const title = {
+    rising: "Personal-loan defaults are still climbing — no peak in sight",
+    easing: `Personal-loan defaults hit ${isRecord ? "a record" : "a cycle high"} — the early-warning gauge has only just started to ease`,
+    turned: "Personal-loan defaults are near the top — the early-warning gauge has already turned",
+  }[state];
+  const gaugeLine = {
+    rising: `the live gauge (loans just starting to miss payments) is ${signed(yoyE)}pp on a year ago and has risen ${nSteps(systemEarlyNpl, rises)} running. The data gives no reason to call the top yet.`,
+    easing: `the live gauge (loans just starting to miss payments) has eased for ${nSteps(systemEarlyNpl, falls)}, from ${f(hi.value)}% in ${hi.period} to ${f(curE.value)}% — but is still ${signed(yoyE)}pp above a year ago. ${leadSentence}`,
+    turned: `the live gauge is already ${signed(yoyE)}pp below a year ago. ${leadSentence}`,
+  }[state];
 
   const steps: CalcStep[] = [
-    { label: "Personal-loan defaults, from their low point to now", math: `${f(low.value)}% (${low.period}) → ${f(curH.value)}% (${curH.period})`, result: `${signed(curH.value - low.value)}pp worse in ${periods.indexOf(curH.period) - periods.indexOf(low.period)} quarters`, source: `${SHEETS.aq} · System NPL · Personal loans` },
-    { label: "The live gauge: loans just starting to miss payments", math: `last readings: ${e.slice(-5).map((v) => (v === null ? "–" : f(v))).join(" → ")}`, result: `${f(curE.value)}% — still climbing (${rises} rises in a row)`, source: `${SHEETS.aq} · System early NPL` },
-    { label: "Test: does the live gauge PREDICT the headline, or move WITH it?", math: `how tightly they move together (0–1 scale), shifting one 0, 1, 2 quarters ahead: ${f(r0.r, 2)}, ${f(r1.r, 2)}, ${f(r2.r, 2)} (${r0.n} quarters)`, result: `tightest with NO shift — they move together in the same quarter` },
-    { label: "Put the two together", math: `live gauge still rising + it moves with the headline`, result: "no sign the default cycle has peaked" },
+    { label: "Personal-loan defaults, from their low point to now", math: `${f(low.value)}% (${low.period}) → ${f(curH.value)}% (${curH.period})`, result: `${signed(curH.value - low.value)}pp worse in ${nSteps(systemNpl, periods.indexOf(curH.period) - periods.indexOf(low.period))}${isRecord ? ` — the highest since ${periods[0]}` : ""}`, source: `${SHEETS.bcb} · NPL · Unsecured personal loans` },
+    { label: "The live gauge: loans just starting to miss payments", math: `last readings: ${recent.map((v) => f(v, dp)).join(" → ")}`, result: gaugeResult, source: `${SHEETS.bcb} · Early NPL · Unsecured personal loans` },
+    { label: "Test: does the live gauge PREDICT the headline, or move WITH it?", math: `how tightly they move together (0–1 scale), shifting the gauge ${shown.map((c) => c.k).join(", ")} ${unit}s ahead: ${shown.map((c) => f(c.r, 2)).join(", ")} (${r0.n} ${unit}s)`, result: leadText },
+    { label: "Put the two together", ...together },
   ];
 
   return {
     id: "personal-cycle-not-peaked",
     kind: "risk",
     confidence: "Medium",
-    title: "Personal-loan defaults are still climbing — no peak in sight",
-    takeaway: `Defaults on personal loans are up ${signed(curH.value - low.value)}pp since ${low.period}, to ${f(curH.value)}% — and the live gauge (loans just starting to miss payments) has risen ${rises} quarters running. The data gives no reason to call the top yet.`,
-    stat: { value: `${f(curH.value)}%`, label: `of personal loans gone bad — and the early-warning gauge is still rising` },
-    detail: `This matters because personal loans are where Nu is growing fastest (see the unsecured-growth insight). We also tested the common belief that early defaults predict headline defaults 2–3 quarters in advance: in this data they don't — the two move together in the same quarter (correlation ${f(r0.r, 2)}). So the message is simple: the live gauge hasn't turned down, which means the default cycle most likely hasn't peaked.`,
-    sources: [SHEETS.aq],
-    formula: "correlation between early defaults(quarter t) and headline defaults(quarter t+k), tested at k = 0, 1, 2",
+    title,
+    takeaway: `Defaults on personal loans are up ${signed(curH.value - low.value)}pp since ${low.period}, to ${isRecord ? "a record " : ""}${f(curH.value)}% — and ${gaugeLine}`,
+    stat: {
+      value: `${f(curH.value)}%`,
+      label: {
+        rising: "of personal loans gone bad — and the early-warning gauge is still rising",
+        easing: `of personal loans gone bad — the early-warning gauge has eased for ${nSteps(systemEarlyNpl, falls)}`,
+        turned: "of personal loans gone bad — but the early-warning gauge has already turned",
+      }[state],
+    },
+    detail: `This matters because personal loans are where Nu is growing fastest (see the unsecured-growth insight). We also tested the common belief that early defaults predict headline defaults: ${best.k === 0 ? `in this data they don't — the two move together in the same ${unit} (correlation ${f(r0.r, 2)})` : `on this data they do, by about ${nSteps(systemNpl, best.k)} — though the link is ${best.r - r0.r >= 0.05 ? "only moderate" : "only slightly tighter than reading them side by side"} (correlation ${f(best.r, 2)} vs ${f(r0.r, 2)})`}. ${state === "rising" ? "So the message is simple: the live gauge hasn't turned down, which means the default cycle most likely hasn't peaked." : state === "easing" ? `So: the gauge is the first thing to turn, and it may be turning — but ${nSteps(systemEarlyNpl, falls)} of easing is a hint, not a trend.` : "The gauge has turned; history says the headline follows."}`,
+    sources: [SHEETS.bcb],
+    formula: `correlation between early defaults(${unit} t) and headline defaults(${unit} t+k), tested at k = 0…${maxK}`,
     steps,
     caveats: [
-      `The link is moderate (correlation ≈ ${f(r0.r, 2)} over ${r0.n} quarters) — good for reading the cycle's direction, not for precise forecasts.`,
+      `The link is moderate (correlation ≈ ${f(best.r, 2)} over ${best.n} ${unit}s) — good for reading the cycle's direction, not for precise forecasts.`,
+      ...(state === "easing" ? [`${isMonthly(curE.period) ? "Monthly" : "Single"} readings are noisy; it takes a few more ${unit}s of easing before a turn is a trend.`] : []),
       "These are Brazil-wide numbers; Nu's own borrowers could be doing better or worse than the average.",
       "Fast interest-rate cuts would be the classic way this cycle turns down.",
     ],
@@ -431,6 +548,7 @@ function mixNpl(bank: string) {
 
 function insightMixRisk(): Insight {
   const nu = mixNpl("Nu");
+  const privPay = last(payrollNpl, "Private-sector payroll");
   const it = mixNpl("Itaú");
   const br = mixNpl("Bradesco");
   const sa = mixNpl("Santander");
@@ -438,7 +556,7 @@ function insightMixRisk(): Insight {
 
   const steps: CalcStep[] = [
     { label: `What Nu's loan book is made of (${nu.booksAt}, R$ mn)`, math: `cards ${mn(nu.c)} (${f((100 * nu.c) / nu.tot, 0)}%) · personal ${mn(nu.u)} (${f((100 * nu.u) / nu.tot, 0)}%) · payroll ${mn(nu.p)} (${f((100 * nu.p) / nu.tot, 0)}%)`, result: `${f((100 * (nu.c + nu.u)) / nu.tot, 0)}% of the book has no collateral behind it`, source: `${SHEETS.loans} · Nu rows, ${nu.booksAt}` },
-    { label: `Brazil-wide default rate of each product (${nu.nplAt})`, math: `cards ${f(nu.nplC)}% · personal ${f(nu.nplU)}% · payroll ${f(nu.nplP)}%`, result: "the 'risk price' of each product, same for every bank", source: `${SHEETS.aq} · System NPL` },
+    { label: `Brazil-wide default rate of each product (${nu.nplAt})`, math: `cards ${f(nu.nplC)}% · personal ${f(nu.nplU)}% · payroll ${f(nu.nplP)}%`, result: "the 'risk price' of each product, same for every bank", source: `${SHEETS.bcb} · NPL` },
     { label: "Multiply Nu's book by those rates", math: `(${mn(nu.c)}×${f(nu.nplC)} + ${mn(nu.u)}×${f(nu.nplU)} + ${mn(nu.p)}×${f(nu.nplP)}) ÷ ${mn(nu.tot)}`, result: `${f(nu.w, 2)}% — the default rate Nu's MENU alone implies` },
     { label: "Same math for the big banks", math: `Itaú ${f(it.w, 2)}% · Santander ${f(sa.w, 2)}% · Bradesco ${f(br.w, 2)}%`, result: "what THEIR menus imply" },
     { label: "The built-in gap Nu has to out-lend", math: `${f(nu.w, 2)} − ${f(it.w, 2)}`, result: `${signed(gap, 2)}pp vs Itaú (${signed(nu.w - br.w, 2)}pp vs Bradesco)` },
@@ -452,13 +570,14 @@ function insightMixRisk(): Insight {
     takeaway: `${f((100 * (nu.c + nu.u)) / nu.tot, 0)}% of Nu's book is credit cards + personal loans — Brazil's two highest-default products. Give every bank IDENTICAL skill and Nu's book would still run ${f(nu.w, 1)}% defaults vs ${f(it.w, 1)}% for Itaú and ${f(br.w, 1)}% for Bradesco. That's risk built into WHAT Nu sells, not HOW WELL it lends.`,
     stat: { value: `${f(nu.w, 1)}%`, label: `the default rate Nu's product menu alone implies — vs ${f(it.w, 1)}% Itaú / ${f(br.w, 1)}% Bradesco` },
     detail: `Comparing banks on headline default rates mixes up two different things: what products they sell, and how well they pick borrowers. This calculation strips out the first. Practical use: when Nu reports defaults close to the big banks, it is actually out-lending them by roughly this gap; when Nu's defaults look worse, check how much is just the menu before drawing conclusions. It also prices the payroll push — every 1% of the book moved from cards into payroll trims ~${f(nu.nplC - nu.nplP, 1)}bp (hundredths of a %) of built-in risk.`,
-    sources: [SHEETS.loans, SHEETS.aq],
+    sources: [SHEETS.loans, SHEETS.bcb],
     formula: "menu default rate (bank) = sum over products of [bank's balance in product × Brazil default rate of product] ÷ bank's total balance",
     steps,
     caveats: [
       "Uses Brazil-wide default rates for every bank on purpose — that's what isolates the menu from the skill.",
       "Covers the three products in the sheet; the big banks also hold mortgages and vehicle loans (usually safer), so their real full-book advantage is bigger than shown, not smaller.",
       `Books are ${nu.booksAt}, default rates are ${nu.nplAt} — IF.data balances publish on a longer lag than the NPL series.`,
+      `Payroll is priced at the all-payroll rate (${f(nu.nplP)}%), but private-sector payroll alone runs ${f(privPay.value)}% (${privPay.period}). The workbooks don't split Nu's payroll book by borrower, so if it leans private-sector, Nu's built-in risk is understated here.`,
     ],
     evidence: {
       title: "Default rate each bank's product menu implies (identical lending skill assumed)",
@@ -515,7 +634,7 @@ function insightUnsecuredCapture(): Insight {
     { label: "Nu's slice of ALL the new lending", math: `${mn(dNu)} ÷ ${mn(dSys)}`, result: `${f(capture)}% — more than any other bank` },
     { label: "Compare that with Nu's normal size in this market", math: `${f(capture)} ÷ ${f(share)}`, result: `${f(ratio, 1)}× bigger than its ${f(share)}% market share` },
     { label: "Compare with the year before that", math: `same math over ${P00}→${P0}`, result: `${f(prevCapture, 0)}% — the ratio swings with how fast the whole market grows`, source: `${SHEETS.loans} · Total row` },
-    { label: "What was happening to defaults meanwhile", math: `personal-loan defaults ${f(low.value)}% (${low.period}) → ${f(nplNow.value)}% (${nplNow.period})`, result: `${signed(nplNow.value - low.value)}pp worse while Nu accelerated`, source: `${SHEETS.aq} · System NPL` },
+    { label: "What was happening to defaults meanwhile", math: `personal-loan defaults ${f(low.value)}% (${low.period}) → ${f(nplNow.value)}% (${nplNow.period})`, result: `${signed(nplNow.value - low.value)}pp worse while Nu accelerated`, source: `${SHEETS.bcb} · NPL · Unsecured personal loans` },
   ];
 
   return {
@@ -526,7 +645,7 @@ function insightUnsecuredCapture(): Insight {
     takeaway: `Of every new real of unsecured (no-collateral) lending Brazil added in the year to ${P1}, ${f(capture, 0)} cents came from Nu — ${f(ratio, 1)}× more than its ${f(share, 0)}% market share would suggest. And it happened while that product's default rate climbed from ${f(low.value)}% to ${f(nplNow.value)}%.`,
     stat: { value: `${f(capture, 0)}%`, label: `of Brazil's entire unsecured-lending growth came from Nu — a bank with a ${f(share)}% share` },
     detail: `Taking growth at ${f(ratio, 1)}× your market share is what winning a market looks like. Doing it while defaults in that exact product rise fastest is what buying risk at the top can look like. Both can be true at once — it depends entirely on how Nu's 2025 borrowers repay. The size of the bet is the insight: ${f(capture, 0)}% of the market's new lending in that window landed on Nu's book.`,
-    sources: [SHEETS.loans, SHEETS.aq],
+    sources: [SHEETS.loans, SHEETS.bcb],
     formula: `Nu's slice = Nu's growth ÷ Brazil's growth (${P0}→${P1});  intensity = that slice ÷ Nu's market share`,
     steps,
     caveats: [
@@ -566,15 +685,21 @@ function insightPayrollEntry(): Insight {
   const santNow = last(loanAbsPayroll, "Santander").value;
   const santDraw = 100 * (santNow / peak - 1);
   const pNpl = last(systemNpl, "Payroll loans").value;
-  const pMax = Math.max(...ser(systemNpl, "Payroll loans").filter((v): v is number => v !== null));
+  const pMax = maxOf(ser(systemNpl, "Payroll loans"));
   const cNpl = last(systemNpl, "Credit card loans").value;
   const mixCut = cNpl - pNpl;
+  // "Payroll" is three products with very different risk; the safety claim
+  // only holds for the segments where the paymaster is the state.
+  const seg = panel(payrollNpl, "Private-sector payroll", ["Private-sector payroll", "Public-sector payroll", "INSS payroll"]);
+  const priv = seg.of("Private-sector payroll"), pub = seg.of("Public-sector payroll"), inss = seg.of("INSS payroll");
+  const privAboveCards = priv > cNpl;
 
   const steps: CalcStep[] = [
     { label: `Nu's payroll-loan book over the year to ${nuNow.period}`, math: `${mn(nuYAgo.value)} (${nuYAgo.period}) → ${mn(nuNow.value)} (${nuNow.period}), R$ mn`, result: `${signed(yoy, 0)}% in a year — Nu's fastest-growing product (${signed(qoq, 0)}% in the last quarter alone)`, source: `${SHEETS.loans} · Nu rows` },
     { label: "Meanwhile, the big bank on the other side", math: `Santander's payroll book: peak ${mn(peak)} (${peakPeriod}) → ${mn(santNow)} now`, result: `${f(santDraw)}% below its peak — retreating`, source: `${SHEETS.loans} · Santander` },
-    { label: "The product's condition right now", math: `payroll defaults ${f(pNpl)}% vs their all-time high of ${f(pMax)}%`, result: pNpl === pMax ? "Nu is entering at the product's WORST defaults on record" : "near the record", source: `${SHEETS.aq} · System NPL · Payroll` },
-    { label: "…and yet payroll is still the safest product around", math: `card defaults ${f(cNpl)}% ÷ payroll defaults ${f(pNpl)}%`, result: `${f(cNpl / pNpl, 1)}× safer than credit cards` },
+    { label: "The product's condition right now", math: `payroll defaults ${f(pNpl)}% vs their all-time high of ${f(pMax)}%`, result: pNpl === pMax ? "Nu is entering at the product's WORST defaults on record" : "near the record", source: `${SHEETS.bcb} · NPL · Payroll loans` },
+    { label: "…and yet payroll is still the safest product around", math: `card defaults ${f(cNpl)}% ÷ payroll defaults ${f(pNpl)}%`, result: `${f(cNpl / pNpl, 1)}× safer than credit cards — on average` },
+    { label: "…but 'payroll' is three products", math: `private-sector workers ${f(priv)}% · public employees ${f(pub)}% · INSS retirees ${f(inss)}%`, result: privAboveCards ? "private-sector payroll now defaults MORE than credit cards — the safety depends on whose salary it is" : `private-sector runs ${f(priv / inss, 1)}× INSS — the safety depends on whose salary it is`, source: `${SHEETS.bcb} · NPL · payroll segments · ${seg.period}` },
     { label: "What this does to Nu's overall risk", math: `${f(cNpl)} − ${f(pNpl)} = ${f(mixCut)}pp safety gap between the products`, result: `every 1% of the book moved cards → payroll trims ~${f(mixCut, 1)}bp of built-in risk` },
   ];
 
@@ -583,10 +708,10 @@ function insightPayrollEntry(): Insight {
     kind: "opportunity",
     confidence: "Medium",
     title: `Nu is sprinting into payroll loans just as the big banks walk out`,
-    takeaway: `Nu's payroll-loan book (loans repaid straight out of salaries) grew ${signed(yoy, 0)}% in the year to ${nuNow.period}, while Santander's sits ${f(santDraw)}% below its peak. It's Nu's safest product — and growing it directly waters down the riskiness of Nu's overall loan menu.`,
+    takeaway: `Nu's payroll-loan book (loans repaid straight out of salaries) grew ${signed(yoy, 0)}% in the year to ${nuNow.period}, while Santander's sits ${f(santDraw)}% below its peak. On the all-payroll average it's Nu's safest product — ${privAboveCards ? `but private-sector payroll now defaults at ${f(priv)}%, above credit cards, so which borrowers Nu lends to decides whether this waters risk down or adds to it.` : "and growing it directly waters down the riskiness of Nu's overall loan menu."}`,
     stat: { value: `${signed(yoy, 0)}%`, label: `growth in Nu's payroll loans in the year to ${nuNow.period} — from a ${f(at(payrollShare, "Nu", nuYAgo.period), 2)}% share to ${f(last(payrollShare, "Nu").value, 2)}%` },
     detail: `Payroll loans get deducted from paychecks before the borrower can spend the money, which is why they run ${f(cNpl / pNpl, 1)}× fewer defaults than credit cards — even now, at ${pNpl >= pMax - 1e-9 ? "the product's worst-ever" : "an elevated"} ${f(pNpl)}%. The timing is the story: Nu scales in exactly when a big incumbent retreats and the product's defaults ${pNpl >= pMax - 1e-9 ? "peak" : "run high"} — a classic contrarian entry. And it connects to the 'loan menu' insight: every 1% of Nu's book that shifts from cards to payroll trims about ${f(mixCut, 1)}bp of built-in risk.`,
-    sources: [SHEETS.loans, SHEETS.aq],
+    sources: [SHEETS.loans, SHEETS.bcb],
     formula: `year growth = Nu(${nuNow.period}) ÷ Nu(${nuYAgo.period}) − 1;  Santander pullback = now ÷ peak − 1;  risk effect = card defaults − payroll defaults, per 1% of book shifted`,
     steps,
     caveats: [
@@ -594,6 +719,7 @@ function insightPayrollEntry(): Insight {
       "IF.data restates recent payroll balances between publications — this workbook revised one recent quarter down by roughly 40% — so read the trend, not any single quarter.",
       "Payroll loans earn thin, rate-capped margins — they lower risk but also lower yield.",
       "Record payroll defaults could mean the product itself is deteriorating (rate caps squeezing weaker borrowers), not just a passing cycle.",
+      `The workbooks don't split Nu's payroll book by borrower. The 'safest product' reading holds for public-sector (${f(pub)}%) and INSS (${f(inss)}%) payroll; at ${f(priv)}%, private-sector payroll is not a safe product today.`,
     ],
     evidence: {
       title: "Payroll-loan market share: Nu walks in as Santander walks out",
@@ -601,6 +727,65 @@ function insightPayrollEntry(): Insight {
       data: cd(payrollShare.periods, [
         { name: "Nu", values: ser(payrollShare, "Nu") },
         { name: "Santander", values: ser(payrollShare, "Santander") },
+      ]),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// K. Private-sector payroll — the "safe" product's riskiest corner
+// ---------------------------------------------------------------------------
+// Newly answerable: the BCB workbook splits payroll NPL by who the borrower is.
+function insightPrivatePayroll(): Insight {
+  const P = "Private-sector payroll";
+  const now = last(payrollNpl, P);
+  const ago = yearAgo(payrollNpl, P);
+  // This card is about the surge; if the line stops rising, it skips.
+  if (now.value <= ago.value) throw new Error(`private payroll NPL ${signed(now.value - ago.value)}pp YoY — no surge`);
+  const low = trough(payrollNpl, P, perYear(payrollNpl)); // this year's low
+  const span = payrollNpl.periods.indexOf(now.period) - payrollNpl.periods.indexOf(low.period);
+  const multiple = now.value / low.value;
+  const isRecord = now.value >= maxOf(ser(payrollNpl, P)) - 1e-9;
+  const seg = panel(payrollNpl, P, ["Public-sector payroll", "INSS payroll", "Payroll loans"]);
+  const pub = seg.of("Public-sector payroll"), inss = seg.of("INSS payroll"), all = seg.of("Payroll loans");
+  const allAgo = yearAgo(payrollNpl, "Payroll loans");
+  const card = at(systemNpl, "Credit card loans", now.period); // same month, same workbook
+  const e = last(payrollEarlyNpl, P);
+  const eAgo = yearAgo(payrollEarlyNpl, P);
+  const eHi = yearHigh(payrollEarlyNpl, P);
+  const eCresting = e.value < eHi.value - 0.25;
+  const grew = multiple >= 2.05 ? "more than doubled" : multiple >= 1.95 ? "doubled" : `rose ${f(100 * (multiple - 1), 0)}%`;
+
+  const steps: CalcStep[] = [
+    { label: "Private-sector payroll defaults, from this year's low to now", math: `${f(low.value)}% (${low.period}) → ${f(now.value)}% (${now.period})`, result: `${f(multiple, 1)}× in ${nSteps(payrollNpl, span)}${isRecord ? ` — the worst since ${payrollNpl.periods[0]}` : ""}`, source: `${SHEETS.bcb} · NPL · Private payroll loans` },
+    { label: "Against the riskiest unsecured product", math: `private-sector payroll ${f(now.value)}% vs credit cards ${f(card)}% (${now.period})`, result: now.value > card ? `${signed(now.value - card)}pp ABOVE credit cards` : `${signed(now.value - card)}pp below credit cards`, source: `${SHEETS.bcb} · NPL · Credit card loans` },
+    { label: "Against the other two kinds of payroll", math: `public employees ${f(pub)}% · INSS retirees & pensioners ${f(inss)}%`, result: `${f(now.value / inss, 1)}× INSS, ${f(now.value / pub, 1)}× public-sector`, source: `${SHEETS.bcb} · NPL · payroll segments · ${seg.period}` },
+    { label: "What the all-payroll average shows", math: `${f(allAgo.value)}% (${allAgo.period}) → ${f(all)}% (${seg.period})`, result: `${signed(all - allAgo.value)}pp — vs ${signed(now.value - ago.value)}pp for private-sector alone` },
+    { label: "The pipeline: private-sector loans 15–90 days late", math: `${f(e.value, 2)}% (${e.period}) vs ${f(eAgo.value, 2)}% a year earlier${eCresting ? `; peaked at ${f(eHi.value, 2)}% in ${eHi.period}` : ""}`, result: `${f(e.value / eAgo.value, 1)}× last year's level — ${eCresting ? "off its peak, but still" : "still"} feeding the 90-day ratio`, source: `${SHEETS.bcb} · Early NPL · Private payroll loans` },
+  ];
+
+  return {
+    id: "private-payroll-surge",
+    kind: "risk",
+    confidence: "High",
+    title: `Private-sector payroll defaults ${grew} in ${nSteps(payrollNpl, span)} — to ${f(now.value)}%, ${now.value > card ? "above credit cards" : `${f(now.value / inss, 1)}× INSS payroll`}`,
+    takeaway: `Payroll loans — repaid straight out of salaries — are the textbook safe product, and for public employees (${f(pub)}%) and INSS pensioners (${f(inss)}%) they still are. But private-sector payroll defaults went from ${f(low.value)}% in ${low.period} to ${f(now.value)}% in ${now.period}${now.value > card ? `, above credit cards (${f(card)}%)` : ""}. Its early-warning gauge is ${f(e.value / eAgo.value, 1)}× last year's level, so more is already in the pipeline.`,
+    stat: { value: `${f(now.value)}%`, label: `of private-sector payroll loans 90+ days overdue (${now.period}) — vs ${f(card)}% for credit cards` },
+    detail: `A payroll deduction is only as good as the payroll behind it. A public salary or an INSS pension keeps paying through a downturn; a private-sector deduction is only there while the borrower keeps the job. That is why the all-payroll average (${f(all)}%) is the wrong number for judging a payroll book: it blends a ${f(inss)}% INSS segment with a ${f(now.value)}% private one. For Nu this matters directly — payroll is its fastest-growing product (see the payroll insight), and whether that growth lowers or raises its risk depends on which of these three lines it is lending into.`,
+    sources: [SHEETS.bcb],
+    formula: `rise = private payroll NPL(${now.period}) ÷ its low over the past year;  compare with card NPL and the other payroll segments in the same ${stepName(payrollNpl)}`,
+    steps,
+    caveats: [
+      "The workbooks don't split Nu's payroll book by borrower, so Nu's exposure to this line can't be measured here.",
+      "A ratio moves with its denominator too: a fast-growing book holds it down while new loans are too young to be 90 days late, then it jumps as they age. Part of this rise may be that seasoning — the workbook has no balances to separate the two.",
+    ],
+    evidence: {
+      title: "90-day NPL: private-sector payroll vs credit cards vs INSS payroll",
+      type: "line",
+      data: cd(payrollNpl.periods, [
+        { name: P, values: ser(payrollNpl, P) },
+        { name: "Credit card loans", values: alignTo(systemNpl, "Credit card loans", payrollNpl.periods) },
+        { name: "INSS payroll", values: ser(payrollNpl, "INSS payroll") },
       ]),
     },
   };
@@ -805,5 +990,6 @@ export const INSIGHTS: Insight[] = [
   insightStockNotFlow,
   insightPersonalCycle,
   insightPayrollEntry,
+  insightPrivatePayroll,
   insightInterMirror,
 ].map(safe).filter((x): x is Insight => x !== null);

@@ -55,7 +55,7 @@ export function InsightsView({ onOpen }: { onOpen: (i: Insight) => void }) {
             Insights
           </h2>
           <span style={{ fontSize: 12, color: t.textHint }}>
-            {INSIGHTS.length} nuanced findings computed from the workbook — click any card for the sources and step-by-step math
+            {INSIGHTS.length} nuanced findings computed from the workbooks — click any card for the sources and step-by-step math
           </span>
         </div>
         {/* plain-English glossary for the few finance terms the data uses */}
@@ -107,10 +107,10 @@ export function InsightsView({ onOpen }: { onOpen: (i: Insight) => void }) {
         >
           <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
             {[
-              ["Computed, not written", "Every number is calculated at load time from the bundled workbook series (Loans, TPV, Asset quality) — the identical data behind the Overview charts. Nothing is typed in by hand."],
+              ["Computed, not written", "Every number is calculated at load time from the bundled workbook series (Loans, TPV, Asset quality, BCB monthly NPL) — the identical data behind the Overview charts. Nothing is typed in by hand."],
               ["Fully auditable", "Each card's modal shows the source rows, every arithmetic step with the real values, the one-line formula, and the caveats that could weaken the conclusion."],
-              ["Honest about limits", "Where the data contradicts folklore we say so (e.g. early NPL is a coincident gauge here, not a 2–3 quarter lead — we measured it). Correlations are evidence of direction, not forecasts."],
-              ["Not investment advice", "These are analytics on the supplied workbook, intended as inputs to your own process."],
+              ["Honest about limits", "Where the data contradicts folklore we say so (e.g. how far early NPL really runs ahead of the headline — we measure the lead from the data instead of assuming the folklore 2–3 quarters). Correlations are evidence of direction, not forecasts."],
+              ["Not investment advice", "These are analytics on the supplied workbooks, intended as inputs to your own process."],
             ].map(([h, b]) => (
               <div key={h} style={{ display: "flex", gap: 10 }}>
                 <span style={{ width: 6, height: 6, borderRadius: "50%", background: t.primary, marginTop: 6, flexShrink: 0 }} />

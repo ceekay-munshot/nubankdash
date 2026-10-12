@@ -2,14 +2,26 @@
 import { t } from "../theme";
 import { WidgetCard } from "./WidgetCard";
 import {
-  creditCardShare, tpvShare, tpvHoles, systemNpl, householdNpl, personalLoanRate, costOfRisk,
+  creditCardShare, tpvShare, tpvHoles, peerNpl, householdNpl, personalLoanRate, costOfRisk,
   peerEarlyNpl, peerNpl15d, peerStage3, peerWriteOffs,
   WORKBOOK, type ChartData,
 } from "../data/datasets";
+import { systemNpl, payrollNpl, BCB_WORKBOOK, BCB_CODES } from "../data/bcb";
 
 /** "1Q16–2Q26" — read off the data so the provenance copy cannot go stale. */
 function coverage(d: ChartData): string {
   return `${d.periods[0]}–${d.periods[d.periods.length - 1]}`;
+}
+
+/** "21129/21050 (card), …" — the SGS codes the parser read off the workbook header. */
+function sgs(lines: [name: string, label: string][]): string {
+  return lines
+    .map(([name, label]) => {
+      const c = BCB_CODES[name];
+      return c ? `${c.npl ?? "?"}/${c.early ?? "?"} (${label})` : null;
+    })
+    .filter(Boolean)
+    .join(", ");
 }
 
 interface SourceEntry {
@@ -54,9 +66,23 @@ const SOURCES: SourceEntry[] = [
       tpvHoleNote(),
   },
   {
-    title: "System & peer NPL — central-bank / IR reports",
+    title: "System NPL by product — BCB monthly series",
     detail:
-      `System NPL and early-NPL by product, plus each bank's own NPL ratio (%), ${coverage(systemNpl)}. ` +
+      `90-day and early (15–90 day) NPL for credit cards, non-payroll personal loans, payroll and all household credit (%), monthly, ${coverage(systemNpl)}. ` +
+      `SGS codes, 90-day/early: ${sgs([["Credit card loans", "card"], ["Personal loans", "personal"], ["Payroll loans", "payroll"], ["All household loans", "household"]])}. ` +
+      "\"All household loans\" is BCB's all-household total — mortgages, vehicle and rural credit included — so it doesn't match the narrower household line earlier editions charted.",
+  },
+  {
+    title: "Payroll NPL by borrower — BCB monthly series",
+    detail:
+      `90-day and early NPL on payroll loans to private-sector workers, public employees and INSS retirees & pensioners (%), ${coverage(payrollNpl)}. ` +
+      `SGS codes: ${sgs([["Private-sector payroll", "private"], ["Public-sector payroll", "public"], ["INSS payroll", "INSS"]])}. ` +
+      "The workbook prints the all-payroll series twice; one copy is used everywhere so the line matches across charts.",
+  },
+  {
+    title: "Peer NPL — bank IR reports",
+    detail:
+      `Each bank's own 90-day NPL ratio (%), ${coverage(peerNpl)}. ` +
       "Nu's own ratio is published in this workbook edition, so the peer chart no longer needs Inter as a stand-in.",
   },
   {
@@ -110,7 +136,7 @@ export function SourceTrail({ generatedAt }: { generatedAt: string }) {
             fontSize: 11, color: t.textHint, display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6,
           }}
         >
-          <span>Workbook: {WORKBOOK}</span>
+          <span>Workbooks: {WORKBOOK} · {BCB_WORKBOOK}</span>
           <span>Rendered {generatedAt}</span>
         </div>
       </div>

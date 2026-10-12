@@ -53,12 +53,21 @@ export const ENTITY_COLORS: Record<string, string> = {
   "Santander Brasil": "#e87ba4", // alias used by the peer-NPL sheet
 };
 
-/** Product series colors for the asset-quality charts (validated first four). */
+/**
+ * Product series colors for the asset-quality charts (validated first four),
+ * plus the payroll borrower segments. The segment chart shares "Payroll loans"
+ * (magenta) with the product chart so the same line keeps its color; the other
+ * three were picked so the four pass the validator all-pairs (worst CVD ΔE
+ * 13.0, normal-vision 16.3), since lines cross.
+ */
 export const PRODUCT_COLORS: Record<string, string> = {
   "Credit card loans": "#2a78d6", // blue
   "Personal loans": "#008300", // green
   "Payroll loans": "#e87ba4", // magenta
-  "Household loans": "#eda100", // yellow
+  "All household loans": "#eda100", // yellow
+  "Private-sector payroll": "#4a3aa7", // violet
+  "Public-sector payroll": "#2a78d6", // blue
+  "INSS payroll": "#008300", // green
 };
 
 export function colorFor(name: string): string {
