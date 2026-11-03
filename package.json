@@ -6,7 +6,8 @@
   "description": "Nubank Brazil — market-share and asset-quality dashboard, embedded in the Munshot host via the Munshot Dashboard SDK.",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "node scripts/export-insights.mjs && tsc -b && vite build",
+    "export:insights": "node scripts/export-insights.mjs",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit"
   },
@@ -20,6 +21,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "esbuild": "^0.21.5",
     "typescript": "^5.6.3",
     "vite": "^5.4.11"
   }
